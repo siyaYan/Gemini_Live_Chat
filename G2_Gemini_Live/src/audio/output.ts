@@ -171,6 +171,7 @@ export class GeminiAudioOutput {
       this.nextPlaybackTime = context.currentTime
 
       context.addEventListener('statechange', () => {
+        if (context !== this.context) return
         if (isRunning(context)) {
           this.notRunningSince = null
           return
@@ -312,6 +313,12 @@ export class GeminiAudioOutput {
       return false
     }
 
+    if (this.needsRebuildAfterInterruption) {
+      this.setState('locked', 'resumed context still needs phone gesture rebuild')
+      this.refresh('resume needs rebuild')
+      return false
+    }
+
     // The clock kept advancing while suspended, so the old cursor is far in the
     // past. Reset it or every queued chunk fires at once.
     this.nextPlaybackTime = context.currentTime
@@ -371,6 +378,12 @@ export class GeminiAudioOutput {
 
     if (!context || !gain || this.state === 'error') {
       this.chunksDropped += 1
+      return false
+    }
+
+    if (this.stalled || this.needsRebuildAfterInterruption) {
+      this.chunksDropped += 1
+      this.setState('locked', 'chunk arrived before audio context rebuild')
       return false
     }
 

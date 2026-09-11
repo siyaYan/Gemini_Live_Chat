@@ -676,6 +676,37 @@ Verify app follows normal iOS routing and does not depend on hardcoded output de
 
 ---
 
+## Test E2 — iOS Screen Unlock Audio Recovery
+
+Known platform limitation:
+
+- The Even Hub SDK exposes microphone control but no native audio-output API.
+- Gemini voice playback therefore uses Web Audio inside the iOS WebView.
+- iOS may suspend or kill Web Audio when the screen locks.
+- A G2 tap is not a DOM user gesture, so it cannot reliably resume Web Audio after unlock.
+
+Implemented best-effort recovery:
+
+- Listen to `visibilitychange`, `pagehide`, `pageshow`, `freeze`, and `resume`.
+- On foreground return, try to resume Web Audio automatically.
+- If iOS reports the context as running but it was interrupted or stalls, treat it as needing a real phone gesture.
+- Any phone tap, including the `Enable Audio` button, can rebuild the AudioContext.
+- Do not queue stale audio into a known-dead context.
+
+Verify:
+
+- Start a session and receive audio.
+- Lock the iPhone screen during or between replies.
+- Unlock and return to Even.
+- If audio is paused, tap `Enable Audio` or anywhere in the phone WebView once.
+- Ask another question; text should continue, and new audio should play if iOS permits Web Audio in the foreground.
+
+Remaining limitation:
+
+- Audio continuing while the phone is locked requires native Even/iOS background audio support and cannot be guaranteed from plugin JavaScript alone.
+
+---
+
 ## Test F — Long Response
 
 Ask:
