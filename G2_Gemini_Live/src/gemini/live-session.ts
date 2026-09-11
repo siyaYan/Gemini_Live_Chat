@@ -1,14 +1,18 @@
-export const GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview'
-export const GEMINI_AUDIO_MIME_TYPE = 'audio/pcm;rate=16000'
-/** Live API output is always 24 kHz, 16-bit, mono, little-endian PCM. */
-export const GEMINI_OUTPUT_SAMPLE_RATE = 24000
+import { DIAGNOSTICS, GEMINI, SYSTEM_INSTRUCTION, VAD } from '../config'
+import { log, warn, error } from '../log'
 
-const LIVE_WS_HOST = 'wss://generativelanguage.googleapis.com/ws'
-const LIVE_WS_CONSTRAINED = `${LIVE_WS_HOST}/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained`
+export const GEMINI_LIVE_MODEL = GEMINI.model
+export const GEMINI_AUDIO_MIME_TYPE = GEMINI.inputMimeType
+export const GEMINI_OUTPUT_SAMPLE_RATE = GEMINI.outputSampleRate
+
+const LIVE_WS_CONSTRAINED =
+  'wss://generativelanguage.googleapis.com/ws/' +
+  'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained'
 const STATS_LOG_INTERVAL_MS = 1000
-const OPEN_TIMEOUT_MS = 8000
-const MAX_LOGGED_FRAMES = 6
 const MAX_LOGGED_FRAME_CHARS = 400
+
+/** What a socket close means for the reconnect decision. */
+export type CloseKind = 'normal' | 'auth' | 'retryable' | 'fatal'
 
 export interface GeminiLiveStats {
   audioChunksSent: number
@@ -29,6 +33,7 @@ export interface GeminiLiveStats {
   serverFrames: number
   lastCloseCode: number | null
   lastCloseReason: string
+  lastCloseKind: CloseKind | null
   lastServerError: string
 }
 
@@ -49,10 +54,11 @@ export interface GeminiLiveCallbacks {
   onOutputAudio?: (pcm: Uint8Array, sampleRate: number) => void
   onGenerationComplete?: () => void
   onTurnComplete?: () => void
-  onInterrupted?: () => void
+  /** `detectedAtMs` is when the frame was parsed, for interruption latency. */
+  onInterrupted?: (detectedAtMs: number) => void
   onStats?: (stats: GeminiLiveStats, label: string) => void
-  onError?: (error: Error) => void
-  onClose?: (event: CloseEvent) => void
+  onError?: (failure: Error) => void
+  onClose?: (event: CloseEvent, kind: CloseKind) => void
 }
 
 type GeminiServerMessage = {
@@ -64,9 +70,7 @@ type GeminiServerMessage = {
     interimInputTranscription?: { text?: string; languageCode?: string }
     outputTranscription?: { text?: string; languageCode?: string }
     modelTurn?: {
-      parts?: Array<{
-        inlineData?: { data?: string; mimeType?: string }
-      }>
+      parts?: Array<{ inlineData?: { data?: string; mimeType?: string } }>
     }
     turnComplete?: boolean
     generationComplete?: boolean
@@ -77,19 +81,10 @@ type GeminiServerMessage = {
 }
 
 /**
- * Why this file changed (Milestone 3 debugging):
+ * The Live API WebSocket.
  *
- * The previous version only resolved the "setup complete" waiters when
- * setupComplete actually arrived, or when WE closed the socket. If Gemini
- * rejected the setup and closed the socket itself (bad model, bad field,
- * expired/consumed token, wrong API version), nothing resolved the waiter, so
- * every possible server-side rejection surfaced on the glasses as the generic
- * "Gemini setupComplete timeout" and the real close code/reason was lost.
- *
- * Now: the close handler resolves the setup waiters with the close code and
- * reason, server `error` frames are parsed, the first few raw frames are
- * logged, and all of it is exposed through the stats object so the phone panel
- * can show the real cause without a dev console.
+ * Protocol only: it decodes frames and reports events. It never decides UI
+ * state, never touches the display, and never plays audio.
  */
 export class GeminiLiveSession {
   private websocket: WebSocket | null = null
@@ -109,6 +104,10 @@ export class GeminiLiveSession {
     return this.connected
   }
 
+  get isReady(): boolean {
+    return this.connected && this.setupComplete
+  }
+
   getStats(): GeminiLiveStats {
     return this.snapshot()
   }
@@ -123,31 +122,29 @@ export class GeminiLiveSession {
     this.loggedFrames = 0
 
     // Do NOT percent-encode: the token name is `auth_tokens/<id>` and the
-    // official SDK passes it through unescaped. Encoding the slash has been a
-    // source of 4xx handshake failures.
+    // official SDK passes it through unescaped.
     const url = `${LIVE_WS_CONSTRAINED}?access_token=${token}`
-    console.log('[Gemini Live] connecting to BidiGenerateContentConstrained (v1beta)')
+    log('Gemini', 'connecting to BidiGenerateContentConstrained (v1beta)')
 
     await new Promise<void>((resolve, reject) => {
       const websocket = new WebSocket(url)
-      // Gemini Live delivers its JSON messages as BINARY frames, not text
-      // frames. Forcing 'arraybuffer' keeps decoding synchronous and in order;
-      // the default 'blob' needs an async read, which can reorder frames.
+      // Gemini sends its JSON as BINARY frames. arraybuffer keeps decoding
+      // synchronous and ordered; the default 'blob' needs an async read.
       websocket.binaryType = 'arraybuffer'
       let settled = false
 
       const openTimeout = window.setTimeout(() => {
         if (settled) return
         settled = true
-        const error = new Error(`Gemini WebSocket open timeout after ${OPEN_TIMEOUT_MS}ms`)
-        this.stats.lastServerError = error.message
+        const failure = new Error(`Gemini WebSocket open timeout after ${GEMINI.openTimeoutMs}ms`)
+        this.stats.lastServerError = failure.message
         try {
           websocket.close()
         } catch {
-          /* ignore */
+          /* already closing */
         }
-        reject(error)
-      }, OPEN_TIMEOUT_MS)
+        reject(failure)
+      }, GEMINI.openTimeoutMs)
 
       websocket.onopen = () => {
         window.clearTimeout(openTimeout)
@@ -156,7 +153,7 @@ export class GeminiLiveSession {
         this.stats.socketOpened = true
         this.sendSetup()
         this.startStatsTimer()
-        console.log('[Gemini Live] connected')
+        log('Gemini', 'connected')
         this.callbacks.onStatus?.('Gemini Live connected')
         settled = true
         resolve()
@@ -165,31 +162,34 @@ export class GeminiLiveSession {
       websocket.onmessage = event => this.handleMessage(event)
 
       websocket.onerror = () => {
-        const error = new Error('Gemini WebSocket error (handshake or transport)')
-        this.stats.lastServerError = error.message
-        console.error('[Gemini Live] websocket error')
-        this.callbacks.onError?.(error)
+        const failure = new Error('Gemini WebSocket error (handshake or transport)')
+        this.stats.lastServerError = failure.message
+        error('Gemini', 'websocket error')
+        this.callbacks.onError?.(failure)
         if (!settled) {
           window.clearTimeout(openTimeout)
           settled = true
-          reject(error)
+          reject(failure)
         }
       }
 
       websocket.onclose = event => {
         window.clearTimeout(openTimeout)
+        const kind = classifyClose(event.code, event.reason, this.closing)
+
         this.connected = false
         this.stats.closedAtMs = performance.now()
         this.stats.lastCloseCode = event.code
         this.stats.lastCloseReason = (event.reason || '').slice(0, 300)
+        this.stats.lastCloseKind = kind
         this.clearStatsTimer()
         this.resolveFinalTranscriptWaiters(false)
-        // The important fix: a server-side rejection must unblock the setup
-        // wait with the actual reason instead of timing out generically.
+        // A server-side rejection must unblock the setup wait with the real
+        // reason rather than timing out generically.
         this.resolveSetupWaiters({ ok: false, reason: this.describeClose(event) })
 
-        console.log(`[Gemini Live] session closed code=${event.code} reason="${event.reason}"`)
-        this.callbacks.onClose?.(event)
+        log('Gemini', `session closed code=${event.code} kind=${kind} reason="${event.reason}"`)
+        this.callbacks.onClose?.(event, kind)
 
         if (!settled) {
           settled = true
@@ -204,7 +204,7 @@ export class GeminiLiveSession {
     })
   }
 
-  waitForSetupComplete(timeoutMs: number): Promise<GeminiSetupResult> {
+  waitForSetupComplete(timeoutMs: number = GEMINI.setupTimeoutMs): Promise<GeminiSetupResult> {
     if (this.setupComplete) return Promise.resolve({ ok: true, reason: null })
 
     const websocket = this.websocket
@@ -225,7 +225,7 @@ export class GeminiLiveSession {
         this.setupWaiters = this.setupWaiters.filter(entry => entry !== waiter)
         resolve({
           ok: false,
-          reason: `Gemini setupComplete timeout after ${timeoutMs}ms (socket still open, frames=${this.stats.serverFrames}${
+          reason: `Gemini setupComplete timeout after ${timeoutMs}ms (frames=${this.stats.serverFrames}${
             this.stats.lastServerError ? `, lastError=${this.stats.lastServerError}` : ''
           })`,
         })
@@ -240,7 +240,6 @@ export class GeminiLiveSession {
 
     if (!websocket || websocket.readyState !== WebSocket.OPEN || !this.setupComplete) {
       this.stats.audioChunksDropped += 1
-      this.emitStats('audio dropped')
       return false
     }
 
@@ -248,10 +247,7 @@ export class GeminiLiveSession {
     websocket.send(
       JSON.stringify({
         realtimeInput: {
-          audio: {
-            data: bytesToBase64(pcm),
-            mimeType: GEMINI_AUDIO_MIME_TYPE,
-          },
+          audio: { data: bytesToBase64(pcm), mimeType: GEMINI_AUDIO_MIME_TYPE },
         },
       }),
     )
@@ -265,18 +261,12 @@ export class GeminiLiveSession {
     const websocket = this.websocket
     if (!websocket || websocket.readyState !== WebSocket.OPEN || this.audioStreamEnded) return
 
-    websocket.send(
-      JSON.stringify({
-        realtimeInput: {
-          audioStreamEnd: true,
-        },
-      }),
-    )
+    websocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }))
     this.audioStreamEnded = true
-    console.log('[Gemini Live] audio stream end sent')
+    log('Gemini', 'audio stream end sent')
   }
 
-  waitForFinalTranscript(timeoutMs: number): Promise<boolean> {
+  waitForFinalTranscript(timeoutMs: number = GEMINI.finalTranscriptTimeoutMs): Promise<boolean> {
     if (this.stats.inputTranscriptFrames > 0) return Promise.resolve(true)
 
     return new Promise(resolve => {
@@ -294,6 +284,7 @@ export class GeminiLiveSession {
     })
   }
 
+  /** Idempotent: safe to call repeatedly from any cleanup path. */
   close(reason = 'client close'): void {
     this.closing = true
     this.clearStatsTimer()
@@ -304,32 +295,35 @@ export class GeminiLiveSession {
     this.websocket = null
     this.connected = false
 
-    if (!websocket || websocket.readyState === WebSocket.CLOSED) return
+    if (!websocket) return
+
+    // Drop the handlers before closing so a late frame cannot reach a session
+    // the orchestrator has already forgotten about.
+    websocket.onmessage = null
+    websocket.onerror = null
+
+    if (websocket.readyState === WebSocket.CLOSED || websocket.readyState === WebSocket.CLOSING) return
+
     if (websocket.readyState === WebSocket.OPEN && this.setupComplete && !this.audioStreamEnded) {
-      websocket.send(
-        JSON.stringify({
-          realtimeInput: {
-            audioStreamEnd: true,
-          },
-        }),
-      )
+      websocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }))
       this.audioStreamEnded = true
     }
 
-    websocket.close(1000, reason.slice(0, 120))
+    try {
+      websocket.close(1000, reason.slice(0, 120))
+    } catch (failure) {
+      warn('Gemini', 'close failed', failure)
+    }
   }
 
   private sendSetup(): void {
     const setup = {
       setup: {
-        model: `models/${GEMINI_LIVE_MODEL}`,
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-        },
+        model: `models/${GEMINI.model}`,
+        generationConfig: { responseModalities: ['AUDIO'] },
+        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
         realtimeInputConfig: {
-          automaticActivityDetection: {
-            disabled: false,
-          },
+          automaticActivityDetection: { disabled: VAD.disabled },
         },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
@@ -337,74 +331,84 @@ export class GeminiLiveSession {
     }
 
     this.websocket?.send(JSON.stringify(setup))
-    // Safe to log: contains no key and no token.
-    console.log('[Gemini Live] setup sent', JSON.stringify(setup))
+    // Safe to log: no key, no token. The instruction is long, so log its size.
+    log('Gemini', `setup sent (systemInstruction ${SYSTEM_INSTRUCTION.length} chars)`)
   }
 
   private handleMessage(event: MessageEvent): void {
     const data = event.data
 
-    if (typeof data !== 'string') {
-      // Gemini can deliver JSON as a Blob/ArrayBuffer in some WebView engines.
-      if (data instanceof Blob) {
-        data
-          .text()
-          .then(text => this.handleTextFrame(text))
-          .catch(error => console.warn('[Gemini Live] failed to read blob frame:', error))
-        return
-      }
-      if (data instanceof ArrayBuffer) {
-        this.handleTextFrame(new TextDecoder().decode(data))
-        return
-      }
-      console.warn('[Gemini Live] unsupported frame type:', typeof data)
+    if (typeof data === 'string') {
+      this.handleTextFrame(data)
       return
     }
 
-    this.handleTextFrame(data)
+    if (data instanceof ArrayBuffer) {
+      this.handleTextFrame(new TextDecoder().decode(data))
+      return
+    }
+
+    if (data instanceof Blob) {
+      data
+        .text()
+        .then(text => this.handleTextFrame(text))
+        .catch(failure => warn('Gemini', 'failed to read blob frame', failure))
+      return
+    }
+
+    warn('Gemini', `unsupported frame type: ${typeof data}`)
   }
 
   private handleTextFrame(raw: string): void {
     this.stats.serverFrames += 1
 
-    if (this.loggedFrames < MAX_LOGGED_FRAMES) {
+    if (this.loggedFrames < DIAGNOSTICS.maxLoggedFrames) {
       this.loggedFrames += 1
-      console.log(`[Gemini Live] frame#${this.stats.serverFrames} ${raw.slice(0, MAX_LOGGED_FRAME_CHARS)}`)
+      log('Gemini', `frame#${this.stats.serverFrames} ${raw.slice(0, MAX_LOGGED_FRAME_CHARS)}`)
     }
 
     let message: GeminiServerMessage
     try {
       message = JSON.parse(raw) as GeminiServerMessage
-    } catch (error) {
-      console.warn('[Gemini Live] failed to parse server message:', error)
+    } catch (failure) {
+      warn('Gemini', 'failed to parse server message', failure)
       return
     }
 
     if (message.error) {
       const detail = `${message.error.status ?? message.error.code ?? 'error'}: ${message.error.message ?? 'unknown'}`
       this.stats.lastServerError = detail.slice(0, 300)
-      console.error(`[Gemini Live] server error ${detail}`)
+      error('Gemini', `server error ${detail}`)
       this.callbacks.onError?.(new Error(`Gemini server error ${detail}`))
       this.resolveSetupWaiters({ ok: false, reason: `Gemini server error ${detail}` })
-      this.emitStats('server error')
       return
     }
 
     if (message.setupComplete) {
       this.setupComplete = true
-      console.log('[Gemini Live] setup complete')
+      log('Gemini', 'setup complete')
       this.callbacks.onStatus?.('Gemini Live setup complete')
       this.resolveSetupWaiters({ ok: true, reason: null })
     }
 
     if (message.goAway?.timeLeft) {
-      console.warn(`[Gemini Live] goAway timeLeft=${message.goAway.timeLeft}`)
+      // The server is about to close this session; the orchestrator treats the
+      // subsequent close as retryable and reconnects with a fresh token.
+      warn('Gemini', `goAway timeLeft=${message.goAway.timeLeft}`)
+      this.callbacks.onStatus?.('Gemini session expiring')
     }
 
     const content = message.serverContent
     if (!content) {
       this.emitStats('message')
       return
+    }
+
+    // Interruption first: everything after it belongs to an abandoned turn.
+    if (content.interrupted) {
+      this.stats.interruptions += 1
+      log('Gemini', 'interrupted')
+      this.callbacks.onInterrupted?.(performance.now())
     }
 
     const interimText = content.interimInputTranscription?.text
@@ -416,7 +420,6 @@ export class GeminiLiveSession {
     const inputText = content.inputTranscription?.text
     if (inputText) {
       this.stats.inputTranscriptFrames += 1
-      console.log(`[Gemini Live] input transcript delta="${inputText}"`)
       this.callbacks.onInputTranscript?.(inputText)
       this.resolveFinalTranscriptWaiters(true)
     }
@@ -424,12 +427,10 @@ export class GeminiLiveSession {
     const outputText = content.outputTranscription?.text
     if (outputText) {
       this.stats.outputTranscriptFrames += 1
-      console.log(`[Gemini Live] output transcript delta="${outputText}"`)
       this.callbacks.onOutputTranscript?.(outputText)
     }
 
-    // Native model audio. Forwarded as raw bytes only — this class must not
-    // know how playback works, and playback must not know the Live protocol.
+    // Native model audio, forwarded as raw bytes only.
     for (const part of content.modelTurn?.parts ?? []) {
       const data = part.inlineData?.data
       if (!data) continue
@@ -440,8 +441,8 @@ export class GeminiLiveSession {
       let pcm: Uint8Array
       try {
         pcm = base64ToBytes(data)
-      } catch (error) {
-        console.warn('[Gemini Live] failed to decode audio chunk:', error)
+      } catch (failure) {
+        warn('Gemini', 'failed to decode audio chunk', failure)
         continue
       }
 
@@ -450,20 +451,13 @@ export class GeminiLiveSession {
       this.callbacks.onOutputAudio?.(pcm, parseSampleRate(mimeType))
     }
 
-    if (content.interrupted) {
-      this.stats.interruptions += 1
-      console.log('[Gemini Live] interrupted')
-      this.callbacks.onInterrupted?.()
-    }
-
     if (content.generationComplete) {
       this.callbacks.onGenerationComplete?.()
     }
 
     if (content.turnComplete) {
       this.stats.turnsCompleted += 1
-      console.log(`[Gemini Live] turn complete turns=${this.stats.turnsCompleted}`)
-      this.callbacks.onStatus?.('Gemini turn complete')
+      log('Gemini', `turn complete turns=${this.stats.turnsCompleted}`)
       this.callbacks.onTurnComplete?.()
     }
 
@@ -502,6 +496,7 @@ export class GeminiLiveSession {
       serverFrames: 0,
       lastCloseCode: null,
       lastCloseReason: '',
+      lastCloseKind: null,
       lastServerError: '',
     }
   }
@@ -519,14 +514,12 @@ export class GeminiLiveSession {
     this.clearStatsTimer()
     this.statsTimer = window.setInterval(() => {
       const stats = this.snapshot()
-      console.log(
-        `[Gemini Live] audio chunks sent=${stats.audioChunksSent} ` +
-          `bytes=${stats.audioBytesSent} ` +
-          `dropped=${stats.audioChunksDropped} ` +
-          `frames=${stats.serverFrames} ` +
+      log(
+        'Gemini',
+        `sent=${stats.audioChunksSent}/${stats.audioBytesSent}B ` +
+          `dropped=${stats.audioChunksDropped} frames=${stats.serverFrames} ` +
           `audioOut=${stats.outputAudioMessages}/${stats.outputAudioBytes}B ` +
-          `setup=${stats.setupComplete} ` +
-          `duration≈${stats.durationSeconds.toFixed(1)}s`,
+          `turns=${stats.turnsCompleted} duration≈${stats.durationSeconds.toFixed(1)}s`,
       )
       this.callbacks.onStats?.(stats, 'streaming')
     }, STATS_LOG_INTERVAL_MS)
@@ -545,24 +538,45 @@ export class GeminiLiveSession {
   private resolveFinalTranscriptWaiters(received: boolean): void {
     const waiters = this.finalTranscriptWaiters
     this.finalTranscriptWaiters = []
-    for (const waiter of waiters) {
-      waiter(received)
-    }
+    for (const waiter of waiters) waiter(received)
   }
 
   private resolveSetupWaiters(result: GeminiSetupResult): void {
     const waiters = this.setupWaiters
     this.setupWaiters = []
-    for (const waiter of waiters) {
-      waiter(result)
-    }
+    for (const waiter of waiters) waiter(result)
   }
+}
+
+/**
+ * Decides whether a close is worth retrying.
+ *
+ * An expired or already-used ephemeral token reports as an auth failure, which
+ * is still retryable — the reconnect mints a fresh one — but is worth naming
+ * separately so the logs do not suggest a network fault.
+ */
+function classifyClose(code: number, reason: string, closingByClient: boolean): CloseKind {
+  if (closingByClient || code === 1000) return 'normal'
+
+  const text = (reason || '').toLowerCase()
+  if (text.includes('token') || text.includes('expired') || text.includes('unauthenticated') || code === 1008) {
+    return 'auth'
+  }
+
+  // 1006 abnormal, 1001 going away, 1011 server error, 1012/1013 restart/overload.
+  if (code === 1006 || code === 1001 || code === 1011 || code === 1012 || code === 1013) return 'retryable'
+
+  // 1002 protocol / 1007 invalid payload mean our setup is wrong; retrying it
+  // unchanged would just fail again.
+  if (code === 1002 || code === 1007) return 'fatal'
+
+  return 'retryable'
 }
 
 function closeCodeHint(code: number, reason: string): string {
   const text = (reason || '').toLowerCase()
 
-  if (text.includes('expired') || text.includes('invalid') && text.includes('token')) {
+  if (text.includes('expired') || (text.includes('invalid') && text.includes('token'))) {
     return 'ephemeral token rejected: mint a fresh one (uses=1 tokens are consumed by the first connect)'
   }
 
@@ -572,14 +586,20 @@ function closeCodeHint(code: number, reason: string): string {
     case 1007:
       return 'invalid setup payload: bad model name or unsupported setup field'
     case 1008:
-      return 'policy/auth failure: ephemeral token invalid, expired, already used, or minted on a different API version'
+      return 'policy/auth failure: token invalid, expired, already used, or minted on a different API version'
     case 1011:
       return 'server-side error'
     case 1006:
-      return 'abnormal close with no handshake: the WebView could not complete the TLS/WS upgrade'
+      return 'abnormal close with no handshake: network dropped or the WebView could not keep the socket'
     default:
       return ''
   }
+}
+
+function parseSampleRate(mimeType: string): number {
+  const match = /rate=(\d+)/.exec(mimeType)
+  const parsed = match ? Number(match[1]) : Number.NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : GEMINI_OUTPUT_SAMPLE_RATE
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -592,12 +612,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   }
 
   return btoa(binary)
-}
-
-function parseSampleRate(mimeType: string): number {
-  const match = /rate=(\d+)/.exec(mimeType)
-  const parsed = match ? Number(match[1]) : Number.NaN
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : GEMINI_OUTPUT_SAMPLE_RATE
 }
 
 function base64ToBytes(base64: string): Uint8Array {

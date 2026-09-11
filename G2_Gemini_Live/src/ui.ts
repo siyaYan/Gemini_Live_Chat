@@ -1,11 +1,29 @@
-type StatusKind = 'connecting' | 'ready' | 'recording' | 'exiting' | 'error'
+import { APP_VERSION, DIAGNOSTICS, LIFECYCLE } from './config'
+
+/**
+ * Phone companion UI.
+ *
+ * Two layers, deliberately separated: a small always-visible summary anyone can
+ * read at a glance, and a collapsed diagnostics block for development. None of
+ * this reaches the glasses.
+ */
+
+export type StatusKind = 'connecting' | 'ready' | 'recording' | 'exiting' | 'error'
+
+export interface SummaryRows {
+  mic: string
+  gemini: string
+  audio: string
+  session: string
+}
 
 let statusEl: HTMLDivElement
-let lastEventEl: HTMLDivElement
-let micStatsEl: HTMLPreElement
 let transcriptEl: HTMLDivElement
-let audioStatusEl: HTMLDivElement
+let lastEventEl: HTMLDivElement
+let diagnosticsEl: HTMLPreElement
 let enableAudioEl: HTMLButtonElement
+let detailsEl: HTMLDetailsElement
+const valueEls = new Map<keyof SummaryRows, HTMLSpanElement>()
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -13,37 +31,52 @@ export function mountUi() {
     <main class="panel">
       <header>
         <div>
-          <p class="eyebrow">Milestone 2</p>
+          <p class="eyebrow">${APP_VERSION}</p>
           <h1>G2 Gemini Live</h1>
         </div>
         <div id="status" class="status status-connecting">Connecting</div>
       </header>
+
       <section>
-        <span>Last event</span>
-        <div id="last-event">Waiting for bridge...</div>
+        <span class="label">Status</span>
+        <dl class="rows">
+          <div class="row"><dt>G2 Mic</dt><dd id="row-mic">—</dd></div>
+          <div class="row"><dt>Gemini</dt><dd id="row-gemini">—</dd></div>
+          <div class="row"><dt>Audio</dt><dd id="row-audio">—</dd></div>
+          <div class="row"><dt>Session</dt><dd id="row-session">00:00</dd></div>
+        </dl>
+        <button id="enable-audio" type="button" hidden>Enable Audio</button>
+        <p class="notice">${LIFECYCLE.audioNotice}</p>
       </section>
+
       <section>
-        <span>Mic diagnostics</span>
-        <pre id="mic-stats">Waiting for bridge...</pre>
-      </section>
-      <section>
-        <span>Gemini transcript</span>
+        <span class="label">Conversation</span>
         <div id="transcript">Waiting for Gemini Live...</div>
       </section>
-      <section>
-        <span>Audio output</span>
-        <div id="audio-status">Not initialised</div>
-        <button id="enable-audio" type="button" hidden>Enable Audio</button>
-      </section>
+
+      <details id="diagnostics-details"${DIAGNOSTICS.showPanel ? '' : ' hidden'}>
+        <summary>Developer diagnostics</summary>
+        <div class="detail-body">
+          <span class="label">Last event</span>
+          <div id="last-event">Waiting for bridge...</div>
+          <pre id="diagnostics">Waiting for bridge...</pre>
+        </div>
+      </details>
     </main>
   `
 
   statusEl = app.querySelector<HTMLDivElement>('#status')!
-  lastEventEl = app.querySelector<HTMLDivElement>('#last-event')!
-  micStatsEl = app.querySelector<HTMLPreElement>('#mic-stats')!
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
-  audioStatusEl = app.querySelector<HTMLDivElement>('#audio-status')!
+  lastEventEl = app.querySelector<HTMLDivElement>('#last-event')!
+  diagnosticsEl = app.querySelector<HTMLPreElement>('#diagnostics')!
   enableAudioEl = app.querySelector<HTMLButtonElement>('#enable-audio')!
+  detailsEl = app.querySelector<HTMLDetailsElement>('#diagnostics-details')!
+
+  valueEls.set('mic', app.querySelector<HTMLSpanElement>('#row-mic')!)
+  valueEls.set('gemini', app.querySelector<HTMLSpanElement>('#row-gemini')!)
+  valueEls.set('audio', app.querySelector<HTMLSpanElement>('#row-audio')!)
+  valueEls.set('session', app.querySelector<HTMLSpanElement>('#row-session')!)
+
   injectStyles()
 }
 
@@ -53,14 +86,11 @@ export function setStatus(kind: StatusKind, text: string) {
   statusEl.textContent = text
 }
 
-export function setLastEvent(text: string) {
-  if (!lastEventEl) return
-  lastEventEl.textContent = text
-}
-
-export function setMicStats(text: string) {
-  if (!micStatsEl) return
-  micStatsEl.textContent = text
+export function setSummary(rows: Partial<SummaryRows>) {
+  for (const [key, value] of Object.entries(rows) as Array<[keyof SummaryRows, string]>) {
+    const el = valueEls.get(key)
+    if (el && value !== undefined) el.textContent = value
+  }
 }
 
 export function setTranscript(text: string) {
@@ -68,9 +98,19 @@ export function setTranscript(text: string) {
   transcriptEl.textContent = text
 }
 
-export function setAudioStatus(text: string) {
-  if (!audioStatusEl) return
-  audioStatusEl.textContent = text
+export function setLastEvent(text: string) {
+  if (!lastEventEl) return
+  lastEventEl.textContent = text
+}
+
+export function setDiagnostics(text: string) {
+  if (!diagnosticsEl || !detailsEl?.open) return
+  diagnosticsEl.textContent = text
+}
+
+/** True when the diagnostics block is expanded — lets main skip the work. */
+export function diagnosticsVisible(): boolean {
+  return Boolean(detailsEl?.open)
 }
 
 /**
@@ -80,7 +120,7 @@ export function setAudioStatus(text: string) {
  */
 export function setEnableAudioVisible(visible: boolean) {
   if (!enableAudioEl) return
-  enableAudioEl.hidden = !visible
+  if (enableAudioEl.hidden !== !visible) enableAudioEl.hidden = !visible
 }
 
 export function onEnableAudio(handler: () => void) {
@@ -106,12 +146,7 @@ function injectStyles() {
       gap: 16px;
       margin-bottom: 20px;
     }
-    h1 {
-      margin: 0;
-      font-size: 22px;
-      font-weight: 650;
-      letter-spacing: 0;
-    }
+    h1 { margin: 0; font-size: 22px; font-weight: 650; }
     .eyebrow {
       margin: 0 0 4px;
       color: #a7a7a7;
@@ -125,53 +160,40 @@ function injectStyles() {
       border-radius: 999px;
       font-size: 12px;
       color: #a7a7a7;
+      white-space: nowrap;
     }
-    .status-ready {
-      border-color: #3cfa44;
-      color: #3cfa44;
-      background: rgba(60, 250, 68, 0.08);
-    }
-    .status-recording {
-      border-color: #ff453a;
-      color: #ff9f9a;
-      background: rgba(255, 69, 58, 0.08);
-    }
-    .status-exiting {
-      border-color: #7b7b7b;
-      color: #e5e5e5;
-      background: rgba(229, 229, 229, 0.06);
-    }
-    .status-error {
-      border-color: #ff453a;
-      color: #ff453a;
-      background: rgba(255, 69, 58, 0.08);
-    }
-    section {
+    .status-ready { border-color: #3cfa44; color: #3cfa44; background: rgba(60, 250, 68, 0.08); }
+    .status-recording { border-color: #ff453a; color: #ff9f9a; background: rgba(255, 69, 58, 0.08); }
+    .status-exiting { border-color: #7b7b7b; color: #e5e5e5; background: rgba(229, 229, 229, 0.06); }
+    .status-error { border-color: #ff453a; color: #ff453a; background: rgba(255, 69, 58, 0.08); }
+    section, details {
       border: 1px solid #3e3e3e;
       border-radius: 8px;
       background: #2e2e2e;
       padding: 16px;
       margin-bottom: 12px;
     }
-    section span {
+    .label {
       display: block;
       color: #a7a7a7;
       font-size: 12px;
-      margin-bottom: 6px;
+      margin-bottom: 10px;
       text-transform: uppercase;
     }
-    #last-event,
-    #transcript,
-    #mic-stats {
-      font-size: 17px;
-      word-break: break-word;
+    .rows { margin: 0; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 6px 0;
+      border-bottom: 1px solid #383838;
     }
-    #audio-status {
-      font-size: 17px;
-      word-break: break-word;
-    }
+    .row:last-child { border-bottom: 0; }
+    .row dt { color: #a7a7a7; font-size: 14px; }
+    .row dd { margin: 0; font-size: 15px; text-align: right; word-break: break-word; }
+    #transcript { font-size: 17px; word-break: break-word; white-space: pre-wrap; }
     #enable-audio {
-      margin-top: 12px;
+      margin-top: 14px;
       width: 100%;
       padding: 12px 16px;
       border: 1px solid #3cfa44;
@@ -181,10 +203,23 @@ function injectStyles() {
       font-size: 16px;
       font-weight: 600;
     }
-    #enable-audio[hidden] {
-      display: none;
+    #enable-audio[hidden] { display: none; }
+    .notice {
+      margin: 12px 0 0;
+      color: #a7a7a7;
+      font-size: 13px;
+      line-height: 1.45;
     }
-    #mic-stats {
+    details summary {
+      color: #a7a7a7;
+      font-size: 12px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    details[hidden] { display: none; }
+    .detail-body { margin-top: 14px; }
+    #last-event { font-size: 15px; word-break: break-word; margin-bottom: 12px; }
+    #diagnostics {
       margin: 0;
       color: #e5e5e5;
       font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

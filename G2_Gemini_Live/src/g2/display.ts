@@ -5,35 +5,50 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
 } from '@evenrealities/even_hub_sdk'
-
-const DISPLAY_WIDTH = 576
-const DISPLAY_HEIGHT = 288
-const CONTAINER_ID = 1
-const CONTAINER_NAME = 'main'
+import { DISPLAY } from '../config'
+import { log, warn, error } from '../log'
+import { paginate } from './paginate'
 
 /**
- * 120 ms matches the official ASR template's debounce comment: "BLE render
- * queue is slow". Gemini emits output-transcription deltas far faster than
- * that, so without it every few characters would become a BLE write.
+ * The glasses are a glanceable surface, not a terminal.
+ *
+ * This module renders exactly two things: a short status line, or a page of
+ * Gemini's answer. Diagnostics never reach it. It owns BLE throttling and page
+ * splitting; it knows nothing about Gemini or conversation state.
  */
-const RENDER_DEBOUNCE_MS = 120
 
-/**
- * Also from the ASR template: ~240 characters is a rough fit for the 576x288
- * text container at the default font. The response body gets slightly less
- * because of the "Gemini:" heading line.
- */
-export const GLASSES_CHAR_BUDGET = 240
-const RESPONSE_CHAR_BUDGET = GLASSES_CHAR_BUDGET - 10
+/** Inner box available to text, once padding is removed on both sides. */
+const INNER_WIDTH = DISPLAY.width - DISPLAY.padding * 2
+const INNER_HEIGHT = DISPLAY.height - DISPLAY.padding * 2 - DISPLAY.headingLines * DISPLAY.lineHeightPx
+
+export interface DisplayStats {
+  renders: number
+  failures: number
+  pages: number
+  currentPage: number
+}
 
 export class G2Display {
   private desiredText = ''
   private lastRendered = ''
   private renderTimer: number | null = null
   private rendering: Promise<void> = Promise.resolve()
-  private renderCount = 0
+  private renders = 0
+  private failures = 0
+  private pages: string[] = []
+  private pageIndex = 0
+  private disposed = false
 
   constructor(private bridge: EvenAppBridge) {}
+
+  getStats(): DisplayStats {
+    return {
+      renders: this.renders,
+      failures: this.failures,
+      pages: this.pages.length,
+      currentPage: this.pages.length ? this.pageIndex + 1 : 0,
+    }
+  }
 
   async mount(initialText: string): Promise<void> {
     await this.createPage(initialText)
@@ -50,8 +65,8 @@ export class G2Display {
       this.desiredText = text
       this.lastRendered = text
       return
-    } catch (error) {
-      console.warn('[G2 Display] Page rebuild failed; trying startup create.', error)
+    } catch (failure) {
+      warn('Display', 'page rebuild failed; trying startup create', failure)
     }
 
     try {
@@ -59,58 +74,84 @@ export class G2Display {
       this.desiredText = text
       this.lastRendered = text
       return
-    } catch (error) {
-      console.warn('[G2 Display] Startup create failed during restore; trying text upgrade.', error)
+    } catch (failure) {
+      warn('Display', 'startup create failed during restore; falling back to text upgrade', failure)
       this.lastRendered = ''
       await this.show(text)
     }
   }
 
-  /** Immediate write. Use for discrete state changes the user is waiting on. */
+  /** Immediate write. For discrete moments the user is waiting on. */
   async show(text: string): Promise<void> {
     this.cancelPendingRender()
+    this.clearResponse()
     this.desiredText = text
     await this.flush()
   }
 
-  /** Immediate write of a short status line ("Listening...", "Thinking..."). */
-  async showStatus(status: string): Promise<void> {
-    await this.show(status)
+  /** Throttled status write, for status driven by streaming events. */
+  showStatus(status: string): void {
+    this.clearResponse()
+    this.queue(status)
   }
 
   /**
-   * Throttled write for streaming response text. Fire-and-forget by design:
-   * transcription deltas must never block the WebSocket message handler.
+   * Render Gemini's answer, paginated.
+   *
+   * While the answer is still streaming we always show the LAST page, because
+   * that is where the new words are arriving. Once the turn completes the page
+   * stays put so it can be read.
    */
-  showResponse(body: string, heading = 'Gemini:'): void {
-    const fitted = fitForGlasses(body, RESPONSE_CHAR_BUDGET)
-    this.queue(fitted ? `${heading}\n${fitted}` : heading)
+  showResponse(body: string, follow = true): void {
+    const text = body.trim()
+
+    if (!text) {
+      this.clearResponse()
+      return
+    }
+
+    this.pages = paginate(text, { width: INNER_WIDTH, height: INNER_HEIGHT })
+    if (!this.pages.length) this.pages = [text]
+
+    if (follow || this.pageIndex >= this.pages.length) {
+      this.pageIndex = this.pages.length - 1
+    }
+
+    this.queue(this.composeResponse())
   }
 
-  /** Throttled status write, for status changes driven by streaming events. */
-  queueStatus(text: string): void {
-    this.queue(text)
+  clearResponse(): void {
+    this.pages = []
+    this.pageIndex = 0
   }
 
-  clearResponse(readyText: string): void {
-    this.queue(readyText)
+  dispose(): void {
+    this.disposed = true
+    this.cancelPendingRender()
+    this.clearResponse()
   }
 
-  getRenderCount(): number {
-    return this.renderCount
+  private composeResponse(): string {
+    const page = this.pages[this.pageIndex] ?? ''
+    // Only mark the page when there is more than one; a counter on every
+    // two-sentence answer is noise on a display this small.
+    const heading = this.pages.length > 1 ? `Gemini ${this.pageIndex + 1}/${this.pages.length}` : 'Gemini'
+    return `${heading}\n${page}`
   }
 
   private queue(text: string): void {
+    if (this.disposed) return
     this.desiredText = text
     if (this.renderTimer !== null) return
 
     this.renderTimer = window.setTimeout(() => {
       this.renderTimer = null
-      void this.flush().catch(error => {
-        // A failed display write must not kill the Gemini session.
-        console.error('[G2 Display] throttled render failed:', error)
+      void this.flush().catch(failure => {
+        // A failed display write must never take down the conversation.
+        this.failures += 1
+        error('Display', 'throttled render failed', failure)
       })
-    }, RENDER_DEBOUNCE_MS)
+    }, DISPLAY.debounceMs)
   }
 
   private cancelPendingRender(): void {
@@ -124,12 +165,12 @@ export class G2Display {
     if (text === this.lastRendered) return this.rendering
 
     this.lastRendered = text
-    this.renderCount += 1
-    console.log(`[G2 Display] response updated chars=${text.length} renders=${this.renderCount}`)
+    this.renders += 1
+    log('Display', `updated chars=${text.length} renders=${this.renders}`)
 
     this.rendering = this.rendering
-      .catch(error => {
-        console.warn('[G2 Display] Previous render failed:', error)
+      .catch(failure => {
+        warn('Display', 'previous render failed', failure)
       })
       .then(() => this.upgrade(text))
 
@@ -163,45 +204,33 @@ export class G2Display {
   }
 
   private async upgrade(text: string): Promise<void> {
-    await this.bridge.textContainerUpgrade(
-      new TextContainerUpgrade({
-        containerID: CONTAINER_ID,
-        containerName: CONTAINER_NAME,
-        content: text,
-      }),
-    )
+    try {
+      await this.bridge.textContainerUpgrade(
+        new TextContainerUpgrade({
+          containerID: DISPLAY.containerId,
+          containerName: DISPLAY.containerName,
+          content: text,
+        }),
+      )
+    } catch (failure) {
+      this.failures += 1
+      throw failure
+    }
   }
 
   private createTextContainer(content: string): TextContainerProperty {
     return new TextContainerProperty({
       xPosition: 0,
       yPosition: 0,
-      width: DISPLAY_WIDTH,
-      height: DISPLAY_HEIGHT,
+      width: DISPLAY.width,
+      height: DISPLAY.height,
       borderWidth: 0,
       borderColor: 5,
-      paddingLength: 4,
-      containerID: CONTAINER_ID,
-      containerName: CONTAINER_NAME,
+      paddingLength: DISPLAY.padding,
+      containerID: DISPLAY.containerId,
+      containerName: DISPLAY.containerName,
       content,
       isEventCapture: 1,
     })
   }
-}
-
-/**
- * Milestone 4 keeps pagination trivial: show the most recent readable block.
- * A long answer is tailed rather than truncated at the front, because the text
- * is still streaming in — the end is the part that just arrived. The cut is
- * moved to a word boundary so the first visible word is not half a word.
- */
-export function fitForGlasses(text: string, budget = RESPONSE_CHAR_BUDGET): string {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  if (clean.length <= budget) return clean
-
-  const tail = clean.slice(clean.length - budget)
-  const boundary = tail.indexOf(' ')
-  const trimmed = boundary > 0 && boundary < 40 ? tail.slice(boundary + 1) : tail
-
-  return `…${trimmed}`
 }
