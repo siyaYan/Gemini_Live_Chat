@@ -9,15 +9,21 @@ export function resolveTokenUrl(): string {
   const configured = import.meta.env.VITE_GEMINI_TOKEN_URL?.trim()
   if (configured) return configured
 
+  if (import.meta.env.PROD) return `${window.location.origin}/api/token`
+
   return `${window.location.protocol}//${window.location.hostname}:8787/token`
 }
 
 export async function fetchGeminiEphemeralToken(tokenUrl = resolveTokenUrl()): Promise<GeminiTokenResponse> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  }
+  const clientKey = import.meta.env.VITE_GEMINI_TOKEN_CLIENT_KEY?.trim()
+  if (clientKey) headers['X-G2-Gemini-Client-Key'] = clientKey
+
   const response = await fetch(tokenUrl, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-    },
+    headers,
   })
 
   if (!response.ok) {

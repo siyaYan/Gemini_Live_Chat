@@ -2,12 +2,20 @@
   "package_id": "com.siyayan.g2geminilive",
   "edition": "202601",
   "name": "G2 Gemini Live",
-  "version": "0.1.0",
-  "min_app_version": "2.0.0",
+  "version": "0.1.1",
+  "min_app_version": "2.2.5",
   "min_sdk_version": "0.0.10",
   "entrypoint": "index.html",
   "permissions": [
-    { "name": "g2-microphone", "desc": "Capture G2 microphone PCM for local diagnostics." }
+    {
+      "name": "network",
+      "desc": "Connect to the private Gemini token service and Gemini Live API.",
+      "whitelist": ["https://*"]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Capture G2 microphone audio for the Gemini Live voice assistant."
+    }
   ],
-  "supported_languages": ["en"]
+  "supported_languages": ["en", "zh"]
 }

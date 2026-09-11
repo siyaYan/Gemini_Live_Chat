@@ -1,15 +1,18 @@
 {
   "name": "g2-gemini-live",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:host": "vite --host 0.0.0.0",
     "token": "node ../dev/token-server.mjs",
     "build": "tsc --noEmit && vite build",
+    "build:private": "tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
-    "pack": "npm run build && evenhub pack app.json dist",
+    "pack": "npm run pack:private",
+    "pack:private": "npm run build:private && evenhub pack app.json dist -o g2-gemini-live-v$npm_package_version.ehpk --sdk-ver 0.0.10",
+    "deploy:vercel": "vercel --prod",
     "simulate": "evenhub-simulator http://localhost:5173",
     "qr": "evenhub qr --url",
     "probe": "node ../dev/live-probe.mjs"

@@ -142,7 +142,7 @@ async function createEphemeralToken() {
 function setCorsHeaders(response) {
   response.setHeader('Access-Control-Allow-Origin', '*')
   response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, X-G2-Gemini-Client-Key')
   response.setHeader('Cache-Control', 'no-store')
 }
 

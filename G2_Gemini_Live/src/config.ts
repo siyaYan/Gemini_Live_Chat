@@ -6,7 +6,7 @@
  * the API key on the dev issuer, and this file ships to the client.
  */
 
-export const APP_VERSION = 'M6.1 gemini-live'
+export const APP_VERSION = '0.1.1-private'
 
 // ---------------------------------------------------------------- Gemini ----
 
@@ -167,9 +167,9 @@ export const LIFECYCLE = {
 
 export const DIAGNOSTICS = {
   /** Verbose category logging. Behaviour must never depend on this. */
-  verbose: true,
+  verbose: import.meta.env.DEV || import.meta.env.VITE_VERBOSE_DIAGNOSTICS === '1',
   /** Show the raw stats panel on the phone. Never on the glasses. */
-  showPanel: true,
+  showPanel: import.meta.env.DEV || import.meta.env.VITE_SHOW_DIAGNOSTICS === '1',
   /** Cap on raw server frames logged per session. */
   maxLoggedFrames: 6,
 } as const

@@ -10,6 +10,7 @@ dist/
 coverage/
 .vite/
 *.tsbuildinfo
+*.ehpk
 
 # External reference checkouts kept local-only
 Even_Voice_AI_Reference/
@@ -19,6 +20,7 @@ EvenHub_Templates_Reference/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.log
 *.wav
 
