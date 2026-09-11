@@ -4,7 +4,9 @@ import { interpretGesture } from './g2/gestures'
 import { G2_MIC_FIELD, G2_MIC_FORMAT, G2MicrophoneProbe, type MicrophoneStats } from './g2/microphone'
 import { mountUi, setLastEvent, setMicStats, setStatus } from './ui'
 
-const READY_TEXT = 'G2 Gemini Live\nMic Test Ready'
+const APP_VERSION = 'M2.2 soft-exit'
+const READY_TEXT = `G2 Gemini Live\n${APP_VERSION}`
+const EXIT_PROMPT_TEXT = 'Exit?\nTap: cancel + mic\nDouble tap: quit'
 
 mountUi()
 setStatus('connecting', 'Connecting to Even Hub bridge')
@@ -18,13 +20,14 @@ microphone.setStatsListener((stats, label) => {
 
 await display.mount(READY_TEXT)
 setStatus('ready', 'Ready on G2')
-setLastEvent('Mic test ready')
+setLastEvent(`${APP_VERSION} mic test ready`)
 setMicStats('Tap once to start G2 microphone diagnostics.')
-console.log('[G2 Gemini Live] Milestone 2 mic test ready.')
+console.log(`[G2 Gemini Live] ${APP_VERSION} mic test ready.`)
 
 let cleanedUp = false
-let exitRequested = false
-let needsPageRestore = false
+let exitArmed = false
+let confirmedExit = false
+let needsHostRecovery = false
 let recovery: Promise<void> | null = null
 let unsubscribe = () => {}
 
@@ -40,8 +43,14 @@ async function cleanup() {
 }
 
 async function handleSingleTap() {
-  if (exitRequested || needsPageRestore) {
-    await recoverFromCanceledExit('single tap after exit dialog')
+  if (exitArmed) {
+    exitArmed = false
+    setLastEvent('Exit canceled locally; starting mic')
+    await display.show(READY_TEXT)
+  }
+
+  if (needsHostRecovery) {
+    await recoverFromHostExit('single tap after foreground exit')
   }
 
   if (!microphone.isRecording) {
@@ -61,50 +70,69 @@ async function handleSingleTap() {
 }
 
 async function handleDoubleTap() {
-  console.log('[G2 Gemini Live] Double tap detected. Requesting app exit.')
-  exitRequested = true
-  needsPageRestore = true
+  if (exitArmed) {
+    await confirmExit()
+    return
+  }
+
+  console.log('[G2 Gemini Live] Double tap detected. Local exit confirmation armed.')
+  exitArmed = true
   setStatus('exiting', 'Exiting')
-  setLastEvent('Double tap exit requested; cancel to continue')
+  setLastEvent('Exit armed: tap cancels, double tap quits')
   if (microphone.isRecording) {
     await microphone.stop()
   }
-  await display.show('Exit requested\nCancel to continue')
-  bridge.shutDownPageContainer(1)
+  setMicStats('Exit is armed. Single tap cancels and starts mic; double tap exits.')
+  await display.show(EXIT_PROMPT_TEXT)
 }
 
-async function recoverFromCanceledExit(reason: string) {
+async function confirmExit() {
+  console.log('[G2 Gemini Live] Exit confirmed. Requesting immediate app shutdown.')
+  confirmedExit = true
+  exitArmed = false
+  setStatus('exiting', 'Exiting')
+  setLastEvent('Exit confirmed')
+  await microphone.stop()
+  await display.show('Exiting...')
+  const closed = await bridge.shutDownPageContainer(0)
+
+  if (!closed) {
+    confirmedExit = false
+    setStatus('error', 'Exit request failed')
+    setLastEvent('shutDownPageContainer(0) returned false')
+  }
+}
+
+async function recoverFromHostExit(reason: string) {
   if (recovery) return recovery
 
-  recovery = restoreAfterExit(reason).finally(() => {
+  recovery = restoreAfterHostExit(reason).finally(() => {
     recovery = null
   })
 
   return recovery
 }
 
-async function restoreAfterExit(reason: string) {
-  console.log(`[G2 Gemini Live] Restoring mic test state after ${reason}.`)
+async function restoreAfterHostExit(reason: string) {
+  console.log(`[G2 Gemini Live] Restoring host page/audio state after ${reason}.`)
   setStatus('ready', 'Restoring G2 page')
-  setLastEvent('Exit canceled; restoring page/audio')
+  setLastEvent('Host foreground restored; resetting page/audio')
   setMicStats('Resetting G2 page/audio state before microphone retry.')
   await microphone.resetControl()
   await wait(200)
   await display.restore(READY_TEXT)
-  exitRequested = false
-  needsPageRestore = false
+  needsHostRecovery = false
   setStatus('ready', 'Ready on G2')
-  setLastEvent('Exit canceled; mic ready')
+  setLastEvent('Host recovery complete; mic ready')
   setMicStats('Tap once to start G2 microphone diagnostics.')
 }
 
 async function handleSystemExitSignal() {
   console.log('[G2 Gemini Live] System exit signal received.')
+  confirmedExit = true
   setStatus('exiting', 'System exit')
   setLastEvent('System exit signal received')
-  await microphone.stop().catch(error => {
-    console.warn('[G2 Gemini Live] Mic stop after system exit signal failed:', error)
-  })
+  await cleanup()
 }
 
 unsubscribe = bridge.onEvenHubEvent(event => {
@@ -131,17 +159,19 @@ unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (gesture === 'foreground-enter') {
-    if (exitRequested || needsPageRestore) {
-      recoverFromCanceledExit('foreground return').catch(error => {
+    if (!confirmedExit && needsHostRecovery) {
+      recoverFromHostExit('foreground return').catch(error => {
         setStatus('error', (error as Error).message)
-        console.error('[G2 Gemini Live] Exit recovery failed:', error)
+        console.error('[G2 Gemini Live] Host recovery failed:', error)
       })
     }
     return
   }
 
   if (gesture === 'foreground-exit') {
-    needsPageRestore = true
+    if (!confirmedExit) {
+      needsHostRecovery = true
+    }
     setLastEvent('Foreground exit signal received')
     return
   }

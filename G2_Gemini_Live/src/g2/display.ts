@@ -1,6 +1,7 @@
 import {
   type EvenAppBridge,
   CreateStartUpPageContainer,
+  RebuildPageContainer,
   TextContainerProperty,
   TextContainerUpgrade,
 } from '@evenrealities/even_hub_sdk'
@@ -25,10 +26,19 @@ export class G2Display {
     this.currentText = ''
 
     try {
+      await this.rebuildPage(text)
+      this.currentText = text
+      return
+    } catch (error) {
+      console.warn('[G2 Display] Page rebuild failed; trying startup create.', error)
+    }
+
+    try {
       await this.createPage(text)
       this.currentText = text
+      return
     } catch (error) {
-      console.warn('[G2 Display] Page restore failed; trying text upgrade.', error)
+      console.warn('[G2 Display] Startup create failed during restore; trying text upgrade.', error)
       this.currentText = ''
       await this.show(text)
     }
@@ -49,26 +59,25 @@ export class G2Display {
     const result = await this.bridge.createStartUpPageContainer(
       new CreateStartUpPageContainer({
         containerTotalNum: 1,
-        textObject: [
-          new TextContainerProperty({
-            xPosition: 0,
-            yPosition: 0,
-            width: DISPLAY_WIDTH,
-            height: DISPLAY_HEIGHT,
-            borderWidth: 0,
-            borderColor: 5,
-            paddingLength: 4,
-            containerID: CONTAINER_ID,
-            containerName: CONTAINER_NAME,
-            content: text,
-            isEventCapture: 1,
-          }),
-        ],
+        textObject: [this.createTextContainer(text)],
       }),
     )
 
     if (result !== 0) {
       throw new Error(`createStartUpPageContainer failed: ${result}`)
+    }
+  }
+
+  private async rebuildPage(text: string): Promise<void> {
+    const result = await this.bridge.rebuildPageContainer(
+      new RebuildPageContainer({
+        containerTotalNum: 1,
+        textObject: [this.createTextContainer(text)],
+      }),
+    )
+
+    if (!result) {
+      throw new Error('rebuildPageContainer returned false')
     }
   }
 
@@ -80,5 +89,21 @@ export class G2Display {
         content: text,
       }),
     )
+  }
+
+  private createTextContainer(content: string): TextContainerProperty {
+    return new TextContainerProperty({
+      xPosition: 0,
+      yPosition: 0,
+      width: DISPLAY_WIDTH,
+      height: DISPLAY_HEIGHT,
+      borderWidth: 0,
+      borderColor: 5,
+      paddingLength: 4,
+      containerID: CONTAINER_ID,
+      containerName: CONTAINER_NAME,
+      content,
+      isEventCapture: 1,
+    })
   }
 }

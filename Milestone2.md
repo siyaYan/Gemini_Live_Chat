@@ -183,6 +183,20 @@ Follow-up recovery patch:
 - If the first `audioControl(true)` returns false, reset audio once, wait briefly, and retry once.
 - Show single-tap failures in the in-app `Last event` panel instead of leaving a stale event message.
 
+Second follow-up physical test finding:
+
+- The same `audioControl(true) returned false` behavior can persist after the host exit dialog is opened and canceled.
+- The official templates call `shutDownPageContainer(1)` for double-tap exit, but they do not handle a canceled exit dialog and resumed microphone capture.
+- The installed SDK documents `createStartUpPageContainer` as the startup-only call and `rebuildPageContainer` as the later page rebuild call.
+
+Second follow-up recovery patch:
+
+- Replace the first double-tap host exit dialog with an in-app exit confirmation.
+- First double tap now arms exit and shows: tap to cancel/start mic, double tap again to quit.
+- Single tap while exit is armed cancels the local exit state and starts microphone capture without entering the host cancel path.
+- Second double tap performs the actual exit with `shutDownPageContainer(0)`.
+- Host foreground recovery now uses `rebuildPageContainer` before falling back to startup create/text upgrade.
+
 # Audio Format
 
 Inspect the installed/current official SDK/template and confirm the actual format.
