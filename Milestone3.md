@@ -12,6 +12,25 @@ Node has also been updated to the supported version.
 
 Proceed with Milestone 3 only.
 
+# Deferred Exit Selection UX
+
+Milestone 2 ended with a safe soft-exit flow:
+
+- First double tap opens an in-app exit prompt.
+- Single tap means No/cancel and returns to ready.
+- Double tap means Yes/exit.
+
+This avoided the Even host exit-cancel path that caused stale microphone/audio state.
+
+For a later milestone, convert the prompt into a real swipe-select UI while keeping tap shortcuts:
+
+- Render `No` and `Yes` as selectable rows.
+- Swipe/scroll toggles the selected row.
+- Single tap confirms the selected row.
+- Double tap remains a fast Yes/exit shortcut.
+
+Do not implement this selection UI in Milestone 3 unless required for Gemini validation.
+
 # Milestone 3 Goal
 
 Connect the physical G2 microphone stream to Gemini Live and prove that Gemini can correctly understand/transcribe speech coming from the glasses.
@@ -159,6 +178,18 @@ Add all relevant env files to .gitignore.
 The token service is temporary development infrastructure.
 
 Do not build the future Personal AI backend yet.
+
+# Current Official API Notes
+
+Use the current Gemini Live WebSocket flow:
+
+- Client connects to `BidiGenerateContentConstrained` using an ephemeral token in `access_token`.
+- Token issuer calls `POST https://generativelanguage.googleapis.com/v1beta/auth_tokens`.
+- Client setup uses `models/gemini-3.1-flash-live-preview`.
+- Audio chunks are sent as base64 PCM in `realtimeInput.audio`.
+- Use `mimeType: "audio/pcm;rate=16000"`.
+- Enable `inputAudioTranscription`.
+- With automatic VAD, send `audioStreamEnd: true` when stopping the mic.
 
 # Interaction
 

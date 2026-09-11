@@ -3,6 +3,7 @@ type StatusKind = 'connecting' | 'ready' | 'recording' | 'exiting' | 'error'
 let statusEl: HTMLDivElement
 let lastEventEl: HTMLDivElement
 let micStatsEl: HTMLPreElement
+let transcriptEl: HTMLDivElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -23,12 +24,17 @@ export function mountUi() {
         <span>Mic diagnostics</span>
         <pre id="mic-stats">Waiting for bridge...</pre>
       </section>
+      <section>
+        <span>Gemini transcript</span>
+        <div id="transcript">Waiting for Gemini Live...</div>
+      </section>
     </main>
   `
 
   statusEl = app.querySelector<HTMLDivElement>('#status')!
   lastEventEl = app.querySelector<HTMLDivElement>('#last-event')!
   micStatsEl = app.querySelector<HTMLPreElement>('#mic-stats')!
+  transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
   injectStyles()
 }
 
@@ -46,6 +52,11 @@ export function setLastEvent(text: string) {
 export function setMicStats(text: string) {
   if (!micStatsEl) return
   micStatsEl.textContent = text
+}
+
+export function setTranscript(text: string) {
+  if (!transcriptEl) return
+  transcriptEl.textContent = text
 }
 
 function injectStyles() {
@@ -121,6 +132,7 @@ function injectStyles() {
       text-transform: uppercase;
     }
     #last-event,
+    #transcript,
     #mic-stats {
       font-size: 17px;
       word-break: break-word;

@@ -16,11 +16,13 @@ export interface MicrophoneStats {
 }
 
 type StatsListener = (stats: MicrophoneStats, label: string) => void
+type PcmListener = (pcm: Uint8Array) => void
 
 export class G2MicrophoneProbe {
   private recording = false
   private logTimer: number | null = null
   private statsListener: StatsListener | null = null
+  private pcmListener: PcmListener | null = null
   private stats: MicrophoneStats = this.createStats()
 
   constructor(private bridge: EvenAppBridge) {}
@@ -35,6 +37,10 @@ export class G2MicrophoneProbe {
 
   setStatsListener(listener: StatsListener | null): void {
     this.statsListener = listener
+  }
+
+  setPcmListener(listener: PcmListener | null): void {
+    this.pcmListener = listener
   }
 
   async start(): Promise<MicrophoneStats> {
@@ -102,6 +108,7 @@ export class G2MicrophoneProbe {
     this.stats.chunks += 1
     this.stats.latestChunkBytes = pcm.byteLength
     this.stats.totalBytes += pcm.byteLength
+    this.pcmListener?.(pcm)
   }
 
   private createStats(): MicrophoneStats {

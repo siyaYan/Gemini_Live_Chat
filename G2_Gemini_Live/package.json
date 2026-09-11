@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:host": "vite --host 0.0.0.0",
+    "token": "node ../dev/token-server.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "pack": "npm run build && evenhub pack app.json dist",
