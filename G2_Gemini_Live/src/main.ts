@@ -4,9 +4,9 @@ import { interpretGesture } from './g2/gestures'
 import { G2_MIC_FIELD, G2_MIC_FORMAT, G2MicrophoneProbe, type MicrophoneStats } from './g2/microphone'
 import { mountUi, setLastEvent, setMicStats, setStatus } from './ui'
 
-const APP_VERSION = 'M2.2 soft-exit'
+const APP_VERSION = 'M2.3 exit-select'
 const READY_TEXT = `G2 Gemini Live\n${APP_VERSION}`
-const EXIT_PROMPT_TEXT = 'Exit?\nTap: cancel + mic\nDouble tap: quit'
+const EXIT_PROMPT_TEXT = 'Exit?\nNo: single tap\nYes: double tap'
 
 mountUi()
 setStatus('connecting', 'Connecting to Even Hub bridge')
@@ -45,8 +45,11 @@ async function cleanup() {
 async function handleSingleTap() {
   if (exitArmed) {
     exitArmed = false
-    setLastEvent('Exit canceled locally; starting mic')
+    setStatus('ready', 'Ready on G2')
+    setLastEvent('Exit canceled locally; mic ready')
+    setMicStats('Exit canceled. Tap once more to start G2 microphone diagnostics.')
     await display.show(READY_TEXT)
+    return
   }
 
   if (needsHostRecovery) {
@@ -82,7 +85,7 @@ async function handleDoubleTap() {
   if (microphone.isRecording) {
     await microphone.stop()
   }
-  setMicStats('Exit is armed. Single tap cancels and starts mic; double tap exits.')
+  setMicStats('Exit selection active. Single tap = No/cancel; double tap = Yes/exit.')
   await display.show(EXIT_PROMPT_TEXT)
 }
 

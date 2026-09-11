@@ -197,6 +197,14 @@ Second follow-up recovery patch:
 - Second double tap performs the actual exit with `shutDownPageContainer(0)`.
 - Host foreground recovery now uses `rebuildPageContainer` before falling back to startup create/text upgrade.
 
+Physical validation update:
+
+- The soft-exit flow avoids the earlier microphone restart failure.
+- Adjust the selection UX so exit confirmation behaves like:
+  - Single tap = No/cancel only, return to ready.
+  - Double tap = Yes/exit.
+  - After canceling, a second single tap starts microphone capture.
+
 # Audio Format
 
 Inspect the installed/current official SDK/template and confirm the actual format.
