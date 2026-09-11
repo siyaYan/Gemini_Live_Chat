@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "pack": "npm run build && evenhub pack app.json dist",
     "simulate": "evenhub-simulator http://localhost:5173",
-    "qr": "evenhub qr --url"
+    "qr": "evenhub qr --url",
+    "probe": "node ../dev/live-probe.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.10"

@@ -4,6 +4,8 @@ let statusEl: HTMLDivElement
 let lastEventEl: HTMLDivElement
 let micStatsEl: HTMLPreElement
 let transcriptEl: HTMLDivElement
+let audioStatusEl: HTMLDivElement
+let enableAudioEl: HTMLButtonElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -28,6 +30,11 @@ export function mountUi() {
         <span>Gemini transcript</span>
         <div id="transcript">Waiting for Gemini Live...</div>
       </section>
+      <section>
+        <span>Audio output</span>
+        <div id="audio-status">Not initialised</div>
+        <button id="enable-audio" type="button" hidden>Enable Audio</button>
+      </section>
     </main>
   `
 
@@ -35,6 +42,8 @@ export function mountUi() {
   lastEventEl = app.querySelector<HTMLDivElement>('#last-event')!
   micStatsEl = app.querySelector<HTMLPreElement>('#mic-stats')!
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
+  audioStatusEl = app.querySelector<HTMLDivElement>('#audio-status')!
+  enableAudioEl = app.querySelector<HTMLButtonElement>('#enable-audio')!
   injectStyles()
 }
 
@@ -57,6 +66,26 @@ export function setMicStats(text: string) {
 export function setTranscript(text: string) {
   if (!transcriptEl) return
   transcriptEl.textContent = text
+}
+
+export function setAudioStatus(text: string) {
+  if (!audioStatusEl) return
+  audioStatusEl.textContent = text
+}
+
+/**
+ * iOS only grants audio permission inside a real DOM gesture handler, and a G2
+ * tap arrives over the Even Hub bridge rather than as a DOM event. This button
+ * is the one reliable place to call AudioContext.resume().
+ */
+export function setEnableAudioVisible(visible: boolean) {
+  if (!enableAudioEl) return
+  enableAudioEl.hidden = !visible
+}
+
+export function onEnableAudio(handler: () => void) {
+  if (!enableAudioEl) return
+  enableAudioEl.addEventListener('click', handler)
 }
 
 function injectStyles() {
@@ -136,6 +165,24 @@ function injectStyles() {
     #mic-stats {
       font-size: 17px;
       word-break: break-word;
+    }
+    #audio-status {
+      font-size: 17px;
+      word-break: break-word;
+    }
+    #enable-audio {
+      margin-top: 12px;
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #3cfa44;
+      border-radius: 8px;
+      background: rgba(60, 250, 68, 0.12);
+      color: #3cfa44;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    #enable-audio[hidden] {
+      display: none;
     }
     #mic-stats {
       margin: 0;
