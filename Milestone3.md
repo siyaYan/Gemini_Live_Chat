@@ -185,6 +185,9 @@ Use the current Gemini Live WebSocket flow:
 
 - Client connects to `BidiGenerateContentConstrained` using an ephemeral token in `access_token`.
 - Token issuer calls `POST https://generativelanguage.googleapis.com/v1beta/auth_tokens`.
+- The current API reference no longer accepts `liveConnectConstraints` in raw REST token payloads.
+- Default local development token minting uses a plain ephemeral token and sends the Live setup from the client.
+- If token constraints are explicitly enabled, use the current `bidiGenerateContentSetup` token field.
 - Client setup uses `models/gemini-3.1-flash-live-preview`.
 - Audio chunks are sent as base64 PCM in `realtimeInput.audio`.
 - Use `mimeType: "audio/pcm;rate=16000"`.

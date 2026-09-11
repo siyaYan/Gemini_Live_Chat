@@ -6,7 +6,7 @@ const TOKEN_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/auth_to
 const host = process.env.GEMINI_TOKEN_HOST ?? '0.0.0.0'
 const port = Number(process.env.GEMINI_TOKEN_PORT ?? 8787)
 const model = process.env.GEMINI_LIVE_MODEL ?? DEFAULT_MODEL
-const useConstraints = process.env.GEMINI_TOKEN_CONSTRAINTS !== '0'
+const useConstraints = process.env.GEMINI_TOKEN_CONSTRAINTS === '1'
 
 const server = http.createServer(async (request, response) => {
   setCorsHeaders(response)
@@ -58,20 +58,20 @@ async function createEphemeralToken() {
     newSessionExpireTime,
     ...(useConstraints
       ? {
-          liveConnectConstraints: {
+          bidiGenerateContentSetup: {
             model: `models/${model}`,
-            config: {
+            generationConfig: {
               responseModalities: ['AUDIO'],
-              inputAudioTranscription: {
-                languageCodes: [],
-              },
-              outputAudioTranscription: {},
-              realtimeInputConfig: {
-                automaticActivityDetection: {
-                  disabled: false,
-                },
+            },
+            realtimeInputConfig: {
+              automaticActivityDetection: {
+                disabled: false,
               },
             },
+            inputAudioTranscription: {
+              languageCodes: [],
+            },
+            outputAudioTranscription: {},
           },
         }
       : {}),
