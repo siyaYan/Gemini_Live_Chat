@@ -1,0 +1,27 @@
+.DS_Store
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+
+# Build output
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# External reference checkouts kept local-only
+Even_Voice_AI_Reference/
+EvenHub_Templates_Reference/
+
+# Local secrets and logs
+.env
+.env.*
+!.env.example
+*.log
+*.wav
+
+# Python cache
+__pycache__/
+*.py[cod]
