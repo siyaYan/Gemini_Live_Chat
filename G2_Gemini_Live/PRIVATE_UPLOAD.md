@@ -83,7 +83,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.2.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.3.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload

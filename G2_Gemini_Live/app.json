@@ -2,7 +2,7 @@
   "package_id": "com.siyayan.g2geminilive",
   "edition": "202601",
   "name": "G2 Gemini Live",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "min_app_version": "2.2.5",
   "min_sdk_version": "0.0.10",
   "entrypoint": "index.html",

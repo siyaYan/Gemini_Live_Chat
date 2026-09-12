@@ -6,7 +6,7 @@
  * the API key on the dev issuer, and this file ships to the client.
  */
 
-export const APP_VERSION = '0.1.2-beta'
+export const APP_VERSION = '0.1.3-beta'
 
 // ---------------------------------------------------------------- Gemini ----
 

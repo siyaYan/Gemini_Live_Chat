@@ -96,6 +96,7 @@ let startupReported = false
 let cleanedUp = false
 let exitArmed = false
 let confirmedExit = false
+let launchSelectionTapIgnored = false
 let needsHostRecovery = false
 let recovery: Promise<void> | null = null
 let unsubscribe = () => {}
@@ -235,6 +236,7 @@ window.addEventListener('offline', onOffline)
 window.addEventListener('online', onOnline)
 window.addEventListener('beforeunload', onBeforeUnload)
 
+const launchTapGuardUntilMs = performance.now() + 1500
 unsubscribe = bridge.onEvenHubEvent(event => {
   const pcm = microphone.handleEvent(event)
   if (pcm) liveSession?.sendPcm(pcm)
@@ -242,6 +244,13 @@ unsubscribe = bridge.onEvenHubEvent(event => {
   const gesture = interpretGesture(event)
 
   if (gesture === 'single-tap') {
+    if (shouldIgnoreLaunchSelectionTap()) {
+      setLastEvent('Launch tap ignored — tap once more to start')
+      display.show(GLASSES.ready).catch(displayFailure => {
+        error('Display', 'launch tap display restore failed', displayFailure)
+      })
+      return
+    }
     handleSingleTap().catch(failure => reportTapFailure(failure as Error))
     return
   }
@@ -280,6 +289,16 @@ unsubscribe = bridge.onEvenHubEvent(event => {
 
 // ---------------------------------------------------------------- gestures --
 
+function shouldIgnoreLaunchSelectionTap(): boolean {
+  if (launchSelectionTapIgnored) return false
+  if (exitArmed || sessionActive || microphone.isRecording) return false
+  if (performance.now() > launchTapGuardUntilMs) return false
+
+  launchSelectionTapIgnored = true
+  log('G2', 'ignored initial launch/menu selection tap')
+  return true
+}
+
 async function handleSingleTap() {
   if (exitArmed) {
     exitArmed = false
@@ -313,22 +332,35 @@ async function handleSingleTap() {
 }
 
 async function handleDoubleTap() {
-  log('G2', 'double tap; requesting system exit dialog')
-  exitArmed = false
+  if (exitArmed) {
+    await confirmExit()
+    return
+  }
+
+  log('G2', 'double tap; exit confirmation armed')
+  exitArmed = true
   displayLocked = true
   setStatus('exiting', 'Exiting')
-  setLastEvent('System exit dialog requested')
+  setLastEvent('Exit armed: tap cancels, double tap quits')
   if (sessionActive || microphone.isRecording) await stopSession(false)
+  await display.show(GLASSES.exitPrompt)
+}
+
+async function confirmExit() {
+  log('G2', 'exit confirmed; shutting down')
+  confirmedExit = true
+  exitArmed = false
+  setStatus('exiting', 'Exiting')
+  setLastEvent('Exit confirmed')
+
+  await cleanup()
   await display.show(GLASSES.exiting)
 
-  needsHostRecovery = true
-  const requested = await bridge.shutDownPageContainer(1)
-  if (!requested) {
-    needsHostRecovery = false
-    displayLocked = false
+  const closed = await bridge.shutDownPageContainer(0)
+  if (!closed) {
+    confirmedExit = false
     setStatus('error', 'Exit request failed')
-    setLastEvent('shutDownPageContainer(1) returned false')
-    await display.show(GLASSES.connectionFailed)
+    setLastEvent('shutDownPageContainer(0) returned false')
   }
 }
 
@@ -386,7 +418,9 @@ async function startSession() {
   const audioReady = await audioOutput.initialize()
   if (!audioReady) {
     warn('Audio', `not ready at session start (state=${audioOutput.getState()})`)
-    setLastEvent('Audio locked — tap Enable Audio on this screen')
+    if (audioOutput.getStats().needsGesture) {
+      setLastEvent('Audio locked — tap Enable Audio on this screen')
+    }
   }
 
   const micStartedAt = performance.now()

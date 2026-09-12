@@ -52,6 +52,10 @@ export class GeminiAudioOutput {
   private unlockTarget: EventTarget | null = null
   /** When the context first became unusable, for the gesture-hint debounce. */
   private notRunningSince: number | null = null
+  /** True only after audio had worked once; initial iOS suspension is not an interruption. */
+  private contextHasRun = false
+  /** Controls whether the phone UI should offer the Enable Audio recovery button. */
+  private promptForGesture = false
   /**
    * Silent-context detection. On iOS an AudioContext can report `running`
    * after an audio-session interruption while its underlying audio unit is
@@ -134,7 +138,7 @@ export class GeminiAudioOutput {
       cancellations: this.cancellations,
       underruns: this.underruns,
       interruptions: this.interruptions,
-      needsGesture: this.computeNeedsGesture() || this.stalled,
+      needsGesture: (this.promptForGesture && this.computeNeedsGesture()) || this.stalled,
       stalled: this.stalled,
       contextGeneration: this.contextGeneration,
       lastError: this.lastError,
@@ -173,12 +177,18 @@ export class GeminiAudioOutput {
       context.addEventListener('statechange', () => {
         if (context !== this.context) return
         if (isRunning(context)) {
+          this.contextHasRun = true
           this.notRunningSince = null
           return
         }
-        this.interruptions += 1
-        warn('Audio', `context state -> ${context.state} (interruption ${this.interruptions})`)
-        this.needsRebuildAfterInterruption = true
+        if (this.contextHasRun) {
+          this.interruptions += 1
+          this.needsRebuildAfterInterruption = true
+          this.promptForGesture = true
+          warn('Audio', `context state -> ${context.state} (interruption ${this.interruptions})`)
+        } else {
+          log('Audio', `context state -> ${context.state} before first playback`)
+        }
         this.setState('locked', `context ${context.state}`)
       })
 
@@ -239,6 +249,8 @@ export class GeminiAudioOutput {
       this.notRunningSince = null
       this.stalled = false
       this.needsRebuildAfterInterruption = false
+      this.promptForGesture = false
+      this.contextHasRun = true
       this.lastProgressAtMs = performance.now()
       this.setState('ready', 'unlocked')
       log('Audio', 'playback unlocked')
@@ -266,6 +278,7 @@ export class GeminiAudioOutput {
     }
 
     if (this.stalled) {
+      this.promptForGesture = true
       this.setState('locked', `${reason}: stalled context needs phone gesture`)
       this.refresh('foreground stalled')
       return false
@@ -275,6 +288,7 @@ export class GeminiAudioOutput {
       // WebKit can claim "running" while the underlying audio unit is still
       // unrecoverable after screen lock. Do not report this as healthy; wait
       // for a real phone tap so unlock() can rebuild.
+      this.promptForGesture = true
       this.setState('locked', `${reason}: interrupted context needs phone gesture`)
       this.refresh('foreground interrupted')
       return false
@@ -309,11 +323,13 @@ export class GeminiAudioOutput {
     }
 
     if (!isRunning(context)) {
+      this.promptForGesture = true
       this.setState('locked', 'resume needs a phone gesture')
       return false
     }
 
     if (this.needsRebuildAfterInterruption) {
+      this.promptForGesture = true
       this.setState('locked', 'resumed context still needs phone gesture rebuild')
       this.refresh('resume needs rebuild')
       return false
@@ -323,6 +339,8 @@ export class GeminiAudioOutput {
     // past. Reset it or every queued chunk fires at once.
     this.nextPlaybackTime = context.currentTime
     this.notRunningSince = null
+    this.contextHasRun = true
+    this.promptForGesture = false
     this.setState('ready', 'resumed after interruption')
     log('Audio', 'resumed after interruption')
     return true
@@ -383,6 +401,7 @@ export class GeminiAudioOutput {
 
     if (this.stalled || this.needsRebuildAfterInterruption) {
       this.chunksDropped += 1
+      this.promptForGesture = true
       this.setState('locked', 'chunk arrived before audio context rebuild')
       return false
     }
@@ -391,6 +410,7 @@ export class GeminiAudioOutput {
       // Still locked. Banking minutes of stale answers to play when the user
       // finally taps would be worse than silence.
       this.chunksDropped += 1
+      this.promptForGesture = true
       this.setState('locked', 'chunk arrived while context suspended')
       return false
     }
@@ -528,6 +548,8 @@ export class GeminiAudioOutput {
     this.gain = null
     this.stalled = false
     this.needsRebuildAfterInterruption = false
+    this.promptForGesture = false
+    this.contextHasRun = false
     this.notRunningSince = null
     this.lastProgressAtMs = performance.now()
 
@@ -551,6 +573,8 @@ export class GeminiAudioOutput {
 
     if (isRunning(context)) {
       this.notRunningSince = null
+      this.contextHasRun = true
+      this.promptForGesture = false
       this.setState('ready', 'context running')
       return true
     }
@@ -564,6 +588,8 @@ export class GeminiAudioOutput {
 
     if (isRunning(context)) {
       this.notRunningSince = null
+      this.contextHasRun = true
+      this.promptForGesture = false
       this.setState('ready', 'context resumed')
       return true
     }
