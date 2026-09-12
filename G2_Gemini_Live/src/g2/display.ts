@@ -1,6 +1,8 @@
 import {
   type EvenAppBridge,
   CreateStartUpPageContainer,
+  ListContainerProperty,
+  ListItemContainerProperty,
   RebuildPageContainer,
   TextContainerProperty,
   TextContainerUpgrade,
@@ -20,6 +22,8 @@ import { paginate } from './paginate'
 /** Inner box available to text, once padding is removed on both sides. */
 const INNER_WIDTH = DISPLAY.width - DISPLAY.padding * 2
 const INNER_HEIGHT = DISPLAY.height - DISPLAY.padding * 2 - DISPLAY.headingLines * DISPLAY.lineHeightPx
+const MODE_LIST_ID = DISPLAY.containerId + 1
+const MODE_LIST_NAME = 'mode-list'
 
 export interface DisplayStats {
   renders: number
@@ -27,6 +31,8 @@ export interface DisplayStats {
   pages: number
   currentPage: number
 }
+
+export type ModeMenuChoice = 'text' | 'voice'
 
 export class G2Display {
   private desiredText = ''
@@ -38,6 +44,7 @@ export class G2Display {
   private pages: string[] = []
   private pageIndex = 0
   private disposed = false
+  private layout: 'text' | 'mode-menu' = 'text'
 
   constructor(private bridge: EvenAppBridge) {}
 
@@ -52,8 +59,33 @@ export class G2Display {
 
   async mount(initialText: string): Promise<void> {
     await this.createPage(initialText)
+    this.layout = 'text'
     this.desiredText = initialText
     this.lastRendered = initialText
+  }
+
+  async mountModeMenu(selected: ModeMenuChoice): Promise<void> {
+    await this.createModeMenu(selected)
+    this.layout = 'mode-menu'
+    this.desiredText = ''
+    this.lastRendered = ''
+  }
+
+  async showModeMenu(selected: ModeMenuChoice): Promise<void> {
+    this.cancelPendingRender()
+    this.clearResponse()
+    this.lastRendered = ''
+
+    try {
+      await this.rebuildModeMenu(selected)
+      this.layout = 'mode-menu'
+      return
+    } catch (failure) {
+      warn('Display', 'mode menu rebuild failed; trying startup create', failure)
+    }
+
+    await this.createModeMenu(selected)
+    this.layout = 'mode-menu'
   }
 
   async restore(text: string): Promise<void> {
@@ -62,6 +94,7 @@ export class G2Display {
 
     try {
       await this.rebuildPage(text)
+      this.layout = 'text'
       this.desiredText = text
       this.lastRendered = text
       return
@@ -71,6 +104,7 @@ export class G2Display {
 
     try {
       await this.createPage(text)
+      this.layout = 'text'
       this.desiredText = text
       this.lastRendered = text
       return
@@ -172,9 +206,19 @@ export class G2Display {
       .catch(failure => {
         warn('Display', 'previous render failed', failure)
       })
-      .then(() => this.upgrade(text))
+      .then(() => this.renderText(text))
 
     return this.rendering
+  }
+
+  private async renderText(text: string): Promise<void> {
+    if (this.layout !== 'text') {
+      await this.rebuildPage(text)
+      this.layout = 'text'
+      return
+    }
+
+    await this.upgrade(text)
   }
 
   private async createPage(text: string): Promise<void> {
@@ -190,6 +234,20 @@ export class G2Display {
     }
   }
 
+  private async createModeMenu(selected: ModeMenuChoice): Promise<void> {
+    const result = await this.bridge.createStartUpPageContainer(
+      new CreateStartUpPageContainer({
+        containerTotalNum: 2,
+        textObject: [this.createModeHeader(selected)],
+        listObject: [this.createModeList()],
+      }),
+    )
+
+    if (result !== 0) {
+      throw new Error(`createStartUpPageContainer(mode menu) failed: ${result}`)
+    }
+  }
+
   private async rebuildPage(text: string): Promise<void> {
     const result = await this.bridge.rebuildPageContainer(
       new RebuildPageContainer({
@@ -200,6 +258,20 @@ export class G2Display {
 
     if (!result) {
       throw new Error('rebuildPageContainer returned false')
+    }
+  }
+
+  private async rebuildModeMenu(selected: ModeMenuChoice): Promise<void> {
+    const result = await this.bridge.rebuildPageContainer(
+      new RebuildPageContainer({
+        containerTotalNum: 2,
+        textObject: [this.createModeHeader(selected)],
+        listObject: [this.createModeList()],
+      }),
+    )
+
+    if (!result) {
+      throw new Error('rebuildPageContainer(mode menu) returned false')
     }
   }
 
@@ -230,6 +302,47 @@ export class G2Display {
       containerID: DISPLAY.containerId,
       containerName: DISPLAY.containerName,
       content,
+      isEventCapture: 1,
+    })
+  }
+
+  private createModeHeader(selected: ModeMenuChoice): TextContainerProperty {
+    return new TextContainerProperty({
+      xPosition: 0,
+      yPosition: 0,
+      width: DISPLAY.width,
+      height: 92,
+      borderWidth: 0,
+      borderColor: 5,
+      paddingLength: DISPLAY.padding,
+      containerID: DISPLAY.containerId,
+      containerName: DISPLAY.containerName,
+      content:
+        'Gemini Mode\n' +
+        'Swipe to choose, tap to open\n' +
+        `Selected: ${selected === 'text' ? 'Text Agent' : 'Voice Chat'}`,
+      isEventCapture: 0,
+    })
+  }
+
+  private createModeList(): ListContainerProperty {
+    return new ListContainerProperty({
+      xPosition: 28,
+      yPosition: 104,
+      width: DISPLAY.width - 56,
+      height: 148,
+      borderWidth: 1,
+      borderColor: 5,
+      borderRadius: 6,
+      paddingLength: 6,
+      containerID: MODE_LIST_ID,
+      containerName: MODE_LIST_NAME,
+      itemContainer: new ListItemContainerProperty({
+        itemCount: 2,
+        itemWidth: 0,
+        isItemSelectBorderEn: 1,
+        itemName: ['Text Agent', 'Voice Chat'],
+      }),
       isEventCapture: 1,
     })
   }

@@ -86,7 +86,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.4.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.5.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload
@@ -134,3 +134,19 @@ Save & Activate
 
 The plugin's Text Agent card should report `Token Configured` after Vercel has
 `EVEN_AI_AGENT_TOKEN` set and the deployment is live.
+
+## Glasses Menu Flow
+
+When launched from the glasses menu, the plugin now opens a mode selector:
+
+```text
+Text Agent
+Voice Chat
+```
+
+- `Text Agent` is a handoff to Even AI's native agent flow. Say `Hey Even` and
+  ask Gemini; Even AI displays the live response on the glasses. Current Even
+  Hub SDK APIs do not expose a way for a plugin WebView to embed or mirror that
+  native Even AI conversation UI.
+- `Voice Chat` keeps the Gemini Live plugin flow. Wake the phone if iOS has
+  suspended the WebView, then tap once to start Gemini Live with AirPods audio.

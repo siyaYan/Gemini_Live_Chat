@@ -1,7 +1,7 @@
-import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
+import { OsEventTypeList, waitForEvenAppBridge, type EvenHubEvent } from '@evenrealities/even_hub_sdk'
 import { GeminiAudioOutput, type AudioOutputStats } from './audio/output'
 import { APP_VERSION, GEMINI, LIFECYCLE, SESSION } from './config'
-import { G2Display } from './g2/display'
+import { G2Display, type ModeMenuChoice } from './g2/display'
 import { interpretGesture } from './g2/gestures'
 import { G2_MIC_FIELD, G2_MIC_FORMAT, G2MicrophoneProbe, type MicrophoneStats } from './g2/microphone'
 import {
@@ -44,13 +44,15 @@ import {
  */
 
 const GLASSES = {
-  ready: 'Ready\nTap to chat',
+  ready: 'Voice ready\nTap to chat',
   starting: 'Starting...',
   connecting: 'Connecting...',
   reconnecting: 'Reconnecting...',
   listening: 'Listening...',
   thinking: 'Thinking...',
   speaking: 'Speaking...',
+  textAgent: 'Text Agent\nSay Hey Even\nAsk Gemini\nNative Even AI replies',
+  voiceReady: 'Voice Chat\nWake phone if needed\nTap once to start',
   exitPrompt: 'Exit?\nNo: single tap\nYes: double tap',
   exiting: 'Exiting...',
   connectionFailed: 'Connection failed\nTap to retry',
@@ -110,6 +112,8 @@ let micStartMs = 0
 let startupReported = false
 
 let cleanedUp = false
+let glassMode: 'menu' | 'text-agent' | 'voice' = 'menu'
+let selectedMode: ModeMenuChoice = 'text'
 let exitArmed = false
 let confirmedExit = false
 let launchSelectionTapIgnored = false
@@ -179,11 +183,11 @@ void audioOutput.initialize().then(() => {
 })
 audioOutput.attachGestureUnlock()
 
-await display.mount(GLASSES.ready)
+await display.mountModeMenu(selectedMode)
 conversation.reset('idle')
 setStatus('ready', 'Ready')
 setLastEvent(`${APP_VERSION} ready · bridge ${bridgeReadyMs}ms`)
-setTranscript('Tap the glasses once to start a conversation.')
+setTranscript('Choose Text Agent or Voice Chat on the glasses.')
 log('Startup', `${APP_VERSION} ready; bridge=${bridgeReadyMs}ms`)
 
 void prefetchToken()
@@ -263,6 +267,8 @@ window.addEventListener('beforeunload', onBeforeUnload)
 
 const launchTapGuardUntilMs = performance.now() + 1500
 unsubscribe = bridge.onEvenHubEvent(event => {
+  if (glassMode === 'menu' && handleModeMenuEvent(event)) return
+
   const pcm = microphone.handleEvent(event)
   if (pcm) liveSession?.sendPcm(pcm)
 
@@ -270,8 +276,8 @@ unsubscribe = bridge.onEvenHubEvent(event => {
 
   if (gesture === 'single-tap') {
     if (shouldIgnoreLaunchSelectionTap()) {
-      setLastEvent('Launch tap ignored — tap once more to start')
-      display.show(GLASSES.ready).catch(displayFailure => {
+      setLastEvent('Launch tap ignored — choose a mode')
+      display.showModeMenu(selectedMode).catch(displayFailure => {
         error('Display', 'launch tap display restore failed', displayFailure)
       })
       return
@@ -324,7 +330,65 @@ function shouldIgnoreLaunchSelectionTap(): boolean {
   return true
 }
 
+function handleModeMenuEvent(event: EvenHubEvent): boolean {
+  const selection = modeChoiceFromListEvent(event)
+  if (!selection) return false
+
+  selectedMode = selection
+  setLastEvent(`Selected ${selectedMode === 'text' ? 'Text Agent' : 'Voice Chat'}`)
+
+  const eventType = event.listEvent?.eventType
+  if (eventType === OsEventTypeList.SCROLL_TOP_EVENT || eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+    void display.showModeMenu(selectedMode)
+    return true
+  }
+
+  void selectMode(selection).catch(failure => reportTapFailure(failure as Error))
+  return true
+}
+
+function modeChoiceFromListEvent(event: EvenHubEvent): ModeMenuChoice | null {
+  const index = event.listEvent?.currentSelectItemIndex
+  const name = event.listEvent?.currentSelectItemName?.toLowerCase()
+
+  if (index === 0 || name?.includes('text')) return 'text'
+  if (index === 1 || name?.includes('voice')) return 'voice'
+  return null
+}
+
+async function selectMode(mode: ModeMenuChoice): Promise<void> {
+  exitArmed = false
+
+  if (mode === 'text') {
+    glassMode = 'text-agent'
+    displayLocked = true
+    setStatus('ready', 'Text Agent')
+    setLastEvent('Text Agent selected — use native Even AI')
+    setTranscript('Text Agent mode uses Even AI. Say “Hey Even” and ask Gemini; the native Even AI UI shows the response on the glasses.')
+    await display.show(GLASSES.textAgent)
+    return
+  }
+
+  glassMode = 'voice'
+  displayLocked = false
+  setStatus('ready', 'Voice Chat')
+  setLastEvent('Voice Chat selected')
+  setTranscript('Voice Chat selected. Wake the phone if needed, then tap the glasses once to start Gemini Live.')
+  await display.show(GLASSES.voiceReady)
+}
+
 async function handleSingleTap() {
+  if (glassMode === 'menu') {
+    await selectMode(selectedMode)
+    return
+  }
+
+  if (glassMode === 'text-agent') {
+    setLastEvent('Text Agent is native Even AI — say “Hey Even”')
+    await display.show(GLASSES.textAgent)
+    return
+  }
+
   if (exitArmed) {
     exitArmed = false
     displayLocked = false
@@ -357,6 +421,21 @@ async function handleSingleTap() {
 }
 
 async function handleDoubleTap() {
+  if (glassMode === 'menu') {
+    await confirmExit()
+    return
+  }
+
+  if (glassMode === 'text-agent') {
+    glassMode = 'menu'
+    displayLocked = true
+    setStatus('ready', 'Choose mode')
+    setLastEvent('Returned to mode selection')
+    setTranscript('Choose Text Agent or Voice Chat on the glasses.')
+    await display.showModeMenu(selectedMode)
+    return
+  }
+
   if (exitArmed) {
     await confirmExit()
     return
@@ -812,6 +891,7 @@ function renderConversation(snapshot: ConversationSnapshot) {
   renderSummary()
 
   if (displayLocked) return
+  if (glassMode !== 'voice') return
 
   switch (snapshot.state) {
     case 'idle':
