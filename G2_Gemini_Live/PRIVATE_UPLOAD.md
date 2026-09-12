@@ -11,11 +11,12 @@ an `.ehpk`, upload the `.ehpk` in the developer portal, then install it from the
 Even app. The package can be cached/extracted on-device, so never put the
 permanent Gemini API key in the client bundle.
 
-This project uses Vercel only for the token issuer:
+This project uses Vercel for two separate backend routes:
 
 ```
-Even Hub private .ehpk -> Vercel /api/token -> Gemini auth_tokens API
-Even Hub private .ehpk -> Gemini Live websocket using ephemeral token
+Voice plugin -> Vercel /api/token -> Gemini auth_tokens API
+Voice plugin -> Gemini Live websocket using ephemeral token
+Even AI native agent -> Vercel /api/v1/chat/completions -> Gemini text model
 ```
 
 ## 1. Deploy Token Issuer to Vercel
@@ -59,6 +60,8 @@ Edit `.env.production.local`:
 
 ```bash
 VITE_GEMINI_TOKEN_URL=https://YOUR_VERCEL_DOMAIN/api/token
+# Optional if the text-agent route is on a different host:
+# VITE_EVEN_AI_AGENT_URL=https://YOUR_VERCEL_DOMAIN/api/v1/chat/completions
 VITE_GEMINI_TOKEN_CLIENT_KEY=same_value_as_GEMINI_TOKEN_CLIENT_KEY_if_used
 VITE_VERBOSE_DIAGNOSTICS=0
 VITE_SHOW_DIAGNOSTICS=0
@@ -83,7 +86,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.3.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.4.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload
@@ -102,9 +105,15 @@ the `.ehpk`, then install it from the Even Realities phone app.
 
 ## Optional: Even AI Text Agent
 
-This is separate from the plugin. It uses Even's built-in Even AI surface, so it
-can be launched from the glasses without opening this plugin WebView. It is
-text/HUD oriented, not Gemini Live audio.
+This is a native Even AI route, but the plugin now includes a setup/status panel
+that makes it feel like one combined Gemini assistant. The plugin shows the
+agent endpoint, checks whether the backend token is configured, and provides a
+copy button for the Even AI Agent Configuration screen.
+
+Use Even AI text mode when you want glasses-first Gemini without waking the
+phone. It is text/HUD oriented, not Gemini Live audio. Use the plugin's Voice
+Chat mode when you want the Gemini Live voice session and phone/AirPods audio
+path.
 
 Set these Vercel environment variables:
 
@@ -123,6 +132,5 @@ API Key/Token: same value as EVEN_AI_AGENT_TOKEN
 Save & Activate
 ```
 
-Use this route when you want glasses-first text Gemini from the native Even AI
-entry point. Use the plugin when you want the Gemini Live voice session and
-phone/AirPods audio path.
+The plugin's Text Agent card should report `Token Configured` after Vercel has
+`EVEN_AI_AGENT_TOKEN` set and the deployment is live.

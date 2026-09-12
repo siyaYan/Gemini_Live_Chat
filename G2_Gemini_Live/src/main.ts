@@ -11,19 +11,27 @@ import {
   type CloseKind,
   type GeminiLiveStats,
 } from './gemini/live-session'
-import { fetchGeminiEphemeralToken, resolveTokenUrl } from './gemini/token-client'
+import {
+  fetchEvenAiAgentHealth,
+  fetchGeminiEphemeralToken,
+  resolveEvenAiAgentUrl,
+  resolveTokenUrl,
+} from './gemini/token-client'
 import { log, warn, error } from './log'
 import { LifecycleMonitor, type LifecycleSample } from './platform/lifecycle'
 import { Conversation, type ConversationSnapshot } from './state/conversation'
 import {
   diagnosticsVisible,
   mountUi,
+  onCopyAgentEndpoint,
   onEnableAudio,
+  onRefreshTextAgent,
   setDiagnostics,
   setEnableAudioVisible,
   setLastEvent,
   setStatus,
   setSummary,
+  setTextAgentInfo,
   setTranscript,
 } from './ui'
 
@@ -54,8 +62,16 @@ const GLASSES = {
 
 const bootStartedAtMs = performance.now()
 mountUi()
+const textAgentUrl = resolveEvenAiAgentUrl()
 setStatus('connecting', 'Connecting to Even Hub bridge')
 setSummary({ mic: 'Idle', gemini: 'Disconnected', audio: 'Not initialised', session: '00:00' })
+setTextAgentInfo({
+  endpoint: textAgentUrl,
+  status: 'Checking text agent backend...',
+  model: '—',
+  protected: null,
+  copied: '',
+})
 
 const bridge = await waitForEvenAppBridge()
 const bridgeReadyMs = Math.round(performance.now() - bootStartedAtMs)
@@ -147,6 +163,14 @@ onEnableAudio(() => {
   })
 })
 
+onCopyAgentEndpoint(() => {
+  void copyTextAgentEndpoint()
+})
+
+onRefreshTextAgent(() => {
+  void refreshTextAgentStatus()
+})
+
 // Create the context up front so the phone can show Locked/Ready before the
 // first tap, and let any phone touch restore it after an iOS interruption.
 void audioOutput.initialize().then(() => {
@@ -163,6 +187,7 @@ setTranscript('Tap the glasses once to start a conversation.')
 log('Startup', `${APP_VERSION} ready; bridge=${bridgeReadyMs}ms`)
 
 void prefetchToken()
+void refreshTextAgentStatus()
 
 clockTimer = window.setInterval(() => {
   // One timer drives the session clock, the gesture-hint debounce, and the
@@ -740,6 +765,44 @@ async function takeToken(): Promise<string> {
 
   const response = await fetchGeminiEphemeralToken(resolveTokenUrl(), GEMINI.tokenFetchTimeoutMs)
   return response.token
+}
+
+// ---------------------------------------------------------- text agent UI ----
+
+async function refreshTextAgentStatus(): Promise<void> {
+  setTextAgentInfo({
+    endpoint: textAgentUrl,
+    status: 'Checking text agent backend...',
+    protected: null,
+    copied: '',
+  })
+
+  try {
+    const health = await fetchEvenAiAgentHealth(textAgentUrl, GEMINI.tokenFetchTimeoutMs)
+    setTextAgentInfo({
+      endpoint: textAgentUrl,
+      status: health.protected
+        ? 'Ready. Select this agent in Even AI, then say “Hey Even”.'
+        : 'Backend live, but EVEN_AI_AGENT_TOKEN is missing in Vercel.',
+      model: health.model,
+      protected: health.protected,
+    })
+  } catch (failure) {
+    setTextAgentInfo({
+      status: `Backend check failed: ${(failure as Error).message}`,
+      model: '—',
+      protected: null,
+    })
+  }
+}
+
+async function copyTextAgentEndpoint(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(textAgentUrl)
+    setTextAgentInfo({ copied: 'Agent URL copied. Paste it into Even AI Agent Configuration.' })
+  } catch {
+    setTextAgentInfo({ copied: 'Copy failed. Long-press the URL above to copy it.' })
+  }
 }
 
 // -------------------------------------------------------------- rendering ----
