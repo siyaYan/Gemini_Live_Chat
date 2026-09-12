@@ -14,17 +14,34 @@ export function resolveTokenUrl(): string {
   return `${window.location.protocol}//${window.location.hostname}:8787/token`
 }
 
-export async function fetchGeminiEphemeralToken(tokenUrl = resolveTokenUrl()): Promise<GeminiTokenResponse> {
+export async function fetchGeminiEphemeralToken(
+  tokenUrl = resolveTokenUrl(),
+  timeoutMs = 8000,
+): Promise<GeminiTokenResponse> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   }
   const clientKey = import.meta.env.VITE_GEMINI_TOKEN_CLIENT_KEY?.trim()
   if (clientKey) headers['X-G2-Gemini-Client-Key'] = clientKey
 
-  const response = await fetch(tokenUrl, {
-    method: 'POST',
-    headers,
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  let response: Response
+  try {
+    response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+    })
+  } catch (failure) {
+    if (failure instanceof DOMException && failure.name === 'AbortError') {
+      throw new Error(`Token fetch timed out after ${timeoutMs}ms (${tokenUrl})`)
+    }
+    throw failure
+  } finally {
+    window.clearTimeout(timeout)
+  }
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '')

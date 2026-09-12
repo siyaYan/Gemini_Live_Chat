@@ -83,7 +83,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.1.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.2.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload
@@ -99,3 +99,30 @@ the `.ehpk`, then install it from the Even Realities phone app.
 - Keep the Vercel endpoint rate limited and watch Gemini usage/billing.
 - For a public release, add real user auth or a bring-your-own-key flow before
   issuing tokens.
+
+## Optional: Even AI Text Agent
+
+This is separate from the plugin. It uses Even's built-in Even AI surface, so it
+can be launched from the glasses without opening this plugin WebView. It is
+text/HUD oriented, not Gemini Live audio.
+
+Set these Vercel environment variables:
+
+```bash
+EVEN_AI_AGENT_TOKEN=generate_a_random_long_value
+GEMINI_TEXT_MODEL=gemini-3.8-flash
+```
+
+After redeploying, configure the Even app:
+
+```text
+Settings → Even AI → Agent Configuration → Add Agent
+Name: Gemini Text
+Endpoint: https://even-gemini-live.siyayan.com/api/v1/chat/completions
+API Key/Token: same value as EVEN_AI_AGENT_TOKEN
+Save & Activate
+```
+
+Use this route when you want glasses-first text Gemini from the native Even AI
+entry point. Use the plugin when you want the Gemini Live voice session and
+phone/AirPods audio path.

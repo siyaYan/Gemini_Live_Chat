@@ -36,7 +36,7 @@ import {
  */
 
 const GLASSES = {
-  ready: 'Ready',
+  ready: 'Ready\nTap to chat',
   starting: 'Starting...',
   connecting: 'Connecting...',
   reconnecting: 'Reconnecting...',
@@ -313,35 +313,22 @@ async function handleSingleTap() {
 }
 
 async function handleDoubleTap() {
-  if (exitArmed) {
-    await confirmExit()
-    return
-  }
-
-  log('G2', 'double tap; exit confirmation armed')
-  exitArmed = true
+  log('G2', 'double tap; requesting system exit dialog')
+  exitArmed = false
   displayLocked = true
   setStatus('exiting', 'Exiting')
-  setLastEvent('Exit armed: tap cancels, double tap quits')
+  setLastEvent('System exit dialog requested')
   if (sessionActive || microphone.isRecording) await stopSession(false)
-  await display.show(GLASSES.exitPrompt)
-}
-
-async function confirmExit() {
-  log('G2', 'exit confirmed; shutting down')
-  confirmedExit = true
-  exitArmed = false
-  setStatus('exiting', 'Exiting')
-  setLastEvent('Exit confirmed')
-
-  await cleanup()
   await display.show(GLASSES.exiting)
 
-  const closed = await bridge.shutDownPageContainer(0)
-  if (!closed) {
-    confirmedExit = false
+  needsHostRecovery = true
+  const requested = await bridge.shutDownPageContainer(1)
+  if (!requested) {
+    needsHostRecovery = false
+    displayLocked = false
     setStatus('error', 'Exit request failed')
-    setLastEvent('shutDownPageContainer(0) returned false')
+    setLastEvent('shutDownPageContainer(1) returned false')
+    await display.show(GLASSES.connectionFailed)
   }
 }
 
@@ -698,7 +685,7 @@ async function prefetchToken(): Promise<void> {
   if (cachedToken && performance.now() - cachedToken.fetchedAt < SESSION.tokenMaxAgeMs) return
 
   try {
-    const response = await fetchGeminiEphemeralToken()
+    const response = await fetchGeminiEphemeralToken(resolveTokenUrl(), GEMINI.tokenFetchTimeoutMs)
     cachedToken = { token: response.token, fetchedAt: performance.now() }
     log('Gemini', 'token prefetched')
   } catch (failure) {
@@ -717,7 +704,7 @@ async function takeToken(): Promise<string> {
     return cached.token
   }
 
-  const response = await fetchGeminiEphemeralToken()
+  const response = await fetchGeminiEphemeralToken(resolveTokenUrl(), GEMINI.tokenFetchTimeoutMs)
   return response.token
 }
 

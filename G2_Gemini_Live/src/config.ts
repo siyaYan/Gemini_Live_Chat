@@ -6,7 +6,7 @@
  * the API key on the dev issuer, and this file ships to the client.
  */
 
-export const APP_VERSION = '0.1.1-private'
+export const APP_VERSION = '0.1.2-beta'
 
 // ---------------------------------------------------------------- Gemini ----
 
@@ -15,6 +15,7 @@ export const GEMINI = {
   inputMimeType: 'audio/pcm;rate=16000',
   /** Live API output is always 24 kHz; parsed from the server mimeType anyway. */
   outputSampleRate: 24000,
+  tokenFetchTimeoutMs: 8000,
   setupTimeoutMs: 10000,
   openTimeoutMs: 8000,
   /** How long to wait for a last input transcript when stopping. */
