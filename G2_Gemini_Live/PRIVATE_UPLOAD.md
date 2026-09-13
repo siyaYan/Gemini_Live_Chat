@@ -46,11 +46,13 @@ Optional private-build guard:
 
 ```bash
 GEMINI_TOKEN_CLIENT_KEY=generate_a_random_long_value
+# Optional separate guard for /glasses/voice; omit to reuse GEMINI_TOKEN_CLIENT_KEY.
+GEMINI_VOICE_CLIENT_KEY=generate_a_random_long_value
 ```
 
 That client key is not a true public-app secret because it is bundled into the
 `.ehpk`, but it is useful friction for a private package and avoids completely
-anonymous token minting.
+anonymous token minting or voice requests.
 
 ## 2. Configure Private Package Build
 

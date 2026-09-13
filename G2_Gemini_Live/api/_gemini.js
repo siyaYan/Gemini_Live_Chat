@@ -137,7 +137,7 @@ export function hasValidAgentToken(request) {
 
 export function hasValidClientKey(request) {
   const expected = process.env.GEMINI_VOICE_CLIENT_KEY || process.env.GEMINI_TOKEN_CLIENT_KEY
-  if (!expected) return true
+  if (!expected) return false
 
   return timingSafeStringEqual(header(request, 'x-g2-gemini-client-key'), expected)
 }

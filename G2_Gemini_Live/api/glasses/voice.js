@@ -33,6 +33,11 @@ export default async function handler(request, response) {
     return
   }
 
+  if (!process.env.GEMINI_VOICE_CLIENT_KEY && !process.env.GEMINI_TOKEN_CLIENT_KEY) {
+    sendJson(response, 503, { error: 'voice_client_key_not_configured' })
+    return
+  }
+
   if (!hasValidClientKey(request)) {
     sendJson(response, 401, { error: 'unauthorized' })
     return
