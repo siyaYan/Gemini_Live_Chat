@@ -53,7 +53,7 @@ const GLASSES = {
   listening: 'Listening...',
   thinking: 'Thinking...',
   speaking: 'Speaking...',
-  textAgent: 'Text Chat\nTap and speak\nAuto-stops on silence\nDouble-tap: modes',
+  textAgent: 'Text Chat\nListening starts now\nAuto-stops on silence\nDouble-tap: modes',
   textListening: 'Listening...\nStop speaking when done\nTap: stop early',
   textThinking: 'Text Chat\nThinking...',
   voiceReady: 'Voice Chat\nWake phone if needed\nTap once to start',
@@ -378,12 +378,9 @@ async function selectMode(mode: ModeMenuChoice): Promise<void> {
   if (mode === 'text') {
     glassMode = 'text-agent'
     displayLocked = true
-    setStatus('ready', 'Text Chat')
-    setLastEvent('Text Chat selected')
-    setTranscript(
-      'Text Chat selected. Tap the glasses once, speak, then stop; the backend transcribes and replies with text on the glasses.',
-    )
-    await display.show(GLASSES.textAgent)
+    setLastEvent('Text Chat selected; starting listener')
+    setTranscript('Text Chat selected. Listening starts now and auto-stops on silence.')
+    await startTextRecording()
     return
   }
 

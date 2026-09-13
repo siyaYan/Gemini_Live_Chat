@@ -107,7 +107,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.7.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.8.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload
@@ -165,9 +165,10 @@ Text Chat
 Voice Chat
 ```
 
-- `Text Chat` records one G2 microphone utterance, auto-stops on silence, sends
-  signed 16-bit PCM to `/glasses/voice`, and renders Gemini's text reply on the
-  glasses. This mirrors the AI Second Brain plugin path.
+- `Text Chat` starts listening as soon as you select it, records one G2
+  microphone utterance, auto-stops on silence, sends signed 16-bit PCM to
+  `/glasses/voice`, and renders Gemini's text reply on the glasses. This mirrors
+  the AI Second Brain plugin path.
 - `Voice Chat` keeps the Gemini Live plugin flow. Wake the phone if iOS has
   suspended the WebView, then tap once to start Gemini Live with AirPods audio.
 
