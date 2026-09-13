@@ -1,6 +1,6 @@
 import { OsEventTypeList, waitForEvenAppBridge, type EvenHubEvent } from '@evenrealities/even_hub_sdk'
 import { GeminiAudioOutput, type AudioOutputStats } from './audio/output'
-import { APP_VERSION, GEMINI, LIFECYCLE, SESSION } from './config'
+import { APP_VERSION, GEMINI, LIFECYCLE, SESSION, TEXT_CHAT } from './config'
 import { G2Display, type ModeMenuChoice } from './g2/display'
 import { interpretGesture } from './g2/gestures'
 import { G2_MIC_FIELD, G2_MIC_FORMAT, G2MicrophoneProbe, type MicrophoneStats } from './g2/microphone'
@@ -13,8 +13,10 @@ import {
 } from './gemini/live-session'
 import {
   fetchEvenAiAgentHealth,
+  fetchGlassesVoice,
   fetchGeminiEphemeralToken,
   resolveEvenAiAgentUrl,
+  resolveGlassesVoiceUrl,
   resolveTokenUrl,
 } from './gemini/token-client'
 import { log, warn, error } from './log'
@@ -51,7 +53,9 @@ const GLASSES = {
   listening: 'Listening...',
   thinking: 'Thinking...',
   speaking: 'Speaking...',
-  textAgent: 'Text Agent\nSay Hey Even\nAsk Gemini\nNative Even AI replies',
+  textAgent: 'Text Chat\nTap and speak\nAuto-stops on silence\nDouble-tap: modes',
+  textListening: 'Listening...\nStop speaking when done\nTap: stop early',
+  textThinking: 'Text Chat\nThinking...',
   voiceReady: 'Voice Chat\nWake phone if needed\nTap once to start',
   exitPrompt: 'Exit?\nNo: single tap\nYes: double tap',
   exiting: 'Exiting...',
@@ -65,6 +69,7 @@ const GLASSES = {
 const bootStartedAtMs = performance.now()
 mountUi()
 const textAgentUrl = resolveEvenAiAgentUrl()
+const glassesVoiceUrl = resolveGlassesVoiceUrl()
 setStatus('connecting', 'Connecting to Even Hub bridge')
 setSummary({ mic: 'Idle', gemini: 'Disconnected', audio: 'Not initialised', session: '00:00' })
 setTextAgentInfo({
@@ -114,6 +119,13 @@ let startupReported = false
 let cleanedUp = false
 let glassMode: 'menu' | 'text-agent' | 'voice' = 'menu'
 let selectedMode: ModeMenuChoice = 'text'
+let textRecording = false
+let textProcessing = false
+let textRecordTimer: number | null = null
+let textVadSpeechHeard = false
+let textVadLastLoudMs = 0
+let textVadStartedAtMs = 0
+let textVadFired = false
 let exitArmed = false
 let confirmedExit = false
 let launchSelectionTapIgnored = false
@@ -187,10 +199,9 @@ await display.mountModeMenu(selectedMode)
 conversation.reset('idle')
 setStatus('ready', 'Ready')
 setLastEvent(`${APP_VERSION} ready · bridge ${bridgeReadyMs}ms`)
-setTranscript('Choose Text Agent or Voice Chat on the glasses.')
+setTranscript('Choose Text Chat or Voice Chat on the glasses.')
 log('Startup', `${APP_VERSION} ready; bridge=${bridgeReadyMs}ms`)
 
-void prefetchToken()
 void refreshTextAgentStatus()
 
 clockTimer = window.setInterval(() => {
@@ -270,7 +281,10 @@ unsubscribe = bridge.onEvenHubEvent(event => {
   if (glassMode === 'menu' && handleModeMenuEvent(event)) return
 
   const pcm = microphone.handleEvent(event)
-  if (pcm) liveSession?.sendPcm(pcm)
+  if (pcm) {
+    if (textRecording) handleTextPcm(pcm)
+    else liveSession?.sendPcm(pcm)
+  }
 
   const gesture = interpretGesture(event)
 
@@ -335,7 +349,7 @@ function handleModeMenuEvent(event: EvenHubEvent): boolean {
   if (!selection) return false
 
   selectedMode = selection
-  setLastEvent(`Selected ${selectedMode === 'text' ? 'Text Agent' : 'Voice Chat'}`)
+  setLastEvent(`Selected ${selectedMode === 'text' ? 'Text Chat' : 'Voice Chat'}`)
 
   const eventType = event.listEvent?.eventType
   if (eventType === OsEventTypeList.SCROLL_TOP_EVENT || eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
@@ -362,9 +376,11 @@ async function selectMode(mode: ModeMenuChoice): Promise<void> {
   if (mode === 'text') {
     glassMode = 'text-agent'
     displayLocked = true
-    setStatus('ready', 'Text Agent')
-    setLastEvent('Text Agent selected — use native Even AI')
-    setTranscript('Text Agent mode uses Even AI. Say “Hey Even” and ask Gemini; the native Even AI UI shows the response on the glasses.')
+    setStatus('ready', 'Text Chat')
+    setLastEvent('Text Chat selected')
+    setTranscript(
+      'Text Chat selected. Tap the glasses once, speak, then stop; the backend transcribes and replies with text on the glasses.',
+    )
     await display.show(GLASSES.textAgent)
     return
   }
@@ -375,6 +391,7 @@ async function selectMode(mode: ModeMenuChoice): Promise<void> {
   setLastEvent('Voice Chat selected')
   setTranscript('Voice Chat selected. Wake the phone if needed, then tap the glasses once to start Gemini Live.')
   await display.show(GLASSES.voiceReady)
+  void prefetchToken()
 }
 
 async function handleSingleTap() {
@@ -384,8 +401,8 @@ async function handleSingleTap() {
   }
 
   if (glassMode === 'text-agent') {
-    setLastEvent('Text Agent is native Even AI — say “Hey Even”')
-    await display.show(GLASSES.textAgent)
+    if (textRecording) await finishTextRecording('tap stop')
+    else if (!textProcessing) await startTextRecording()
     return
   }
 
@@ -427,11 +444,12 @@ async function handleDoubleTap() {
   }
 
   if (glassMode === 'text-agent') {
+    if (textRecording) await cancelTextRecording('mode menu')
     glassMode = 'menu'
     displayLocked = true
     setStatus('ready', 'Choose mode')
     setLastEvent('Returned to mode selection')
-    setTranscript('Choose Text Agent or Voice Chat on the glasses.')
+    setTranscript('Choose Text Chat or Voice Chat on the glasses.')
     await display.showModeMenu(selectedMode)
     return
   }
@@ -474,6 +492,151 @@ async function handleSystemExitSignal() {
   setStatus('exiting', 'System exit')
   setLastEvent('System exit signal received')
   await cleanup()
+}
+
+async function startTextRecording() {
+  if (!navigator.onLine) {
+    setLastEvent('Network offline')
+    await display.show(GLASSES.offline)
+    return
+  }
+
+  resetTextVad()
+  textRecording = true
+  textProcessing = false
+  displayLocked = true
+  setStatus('recording', 'Text Listening')
+  setLastEvent('Text Chat recording')
+  setTranscript('Listening... stop speaking when done, or tap once to stop early.')
+  await display.show(GLASSES.textListening)
+
+  try {
+    await microphone.start({ capturePcm: true })
+  } catch (failure) {
+    textRecording = false
+    microphone.consumeCapturedPcm()
+    setStatus('error', 'Microphone failed')
+    setLastEvent((failure as Error).message)
+    setTranscript(`Text Chat microphone failed: ${(failure as Error).message}`)
+    await display.show(GLASSES.micFailed)
+    return
+  }
+
+  textRecordTimer = window.setTimeout(() => {
+    void finishTextRecording('max recording time')
+  }, TEXT_CHAT.maxRecordMs)
+}
+
+async function finishTextRecording(reason: string) {
+  if (!textRecording) return
+
+  textRecording = false
+  textProcessing = true
+  clearTextRecordTimer()
+
+  setStatus('connecting', 'Text Thinking')
+  setLastEvent(`Text Chat processing: ${reason}`)
+  setTranscript('Thinking...')
+  await display.show(GLASSES.textThinking)
+
+  try {
+    const stats = await microphone.stop()
+    latestMicStats = stats
+    const pcm = microphone.consumeCapturedPcm()
+
+    if (!pcm.byteLength) {
+      setStatus('ready', 'Text Chat')
+      setLastEvent('No audio received')
+      setTranscript('No audio received. Tap once to try again.')
+      await display.show('No audio received\nTap once to retry')
+      return
+    }
+
+    const result = await fetchGlassesVoice(
+      pcm,
+      TEXT_CHAT.sampleRate,
+      glassesVoiceUrl,
+      TEXT_CHAT.voiceFetchTimeoutMs,
+    )
+    const answer = result.display_text || "Didn't catch that."
+
+    setStatus('ready', 'Text Chat')
+    setLastEvent(`Text Chat answered (${formatMicStats(stats)})`)
+    setTranscript(formatTextChatTranscript(result.transcript, answer))
+    display.showResponse(answer, false)
+  } catch (failure) {
+    const message = (failure as Error).message
+    lastFailure = message
+    setStatus('error', 'Text Chat failed')
+    setLastEvent(message)
+    setTranscript(`Text Chat failed: ${message}`)
+    await display.show(`Text Chat failed\n${message.slice(0, 180)}\nTap to retry`)
+  } finally {
+    textProcessing = false
+  }
+}
+
+async function cancelTextRecording(reason: string) {
+  clearTextRecordTimer()
+  textRecording = false
+  textProcessing = false
+
+  await microphone.stop().catch(failure => {
+    warn('G2', `text mic stop during ${reason} failed`, failure)
+    return latestMicStats
+  })
+  microphone.consumeCapturedPcm()
+}
+
+function handleTextPcm(chunk: Uint8Array) {
+  if (!textRecording || textVadFired) return
+
+  const rms = pcmRms(chunk)
+  const now = performance.now()
+
+  if (rms >= TEXT_CHAT.vadRmsThreshold) {
+    textVadSpeechHeard = true
+    textVadLastLoudMs = now
+    return
+  }
+
+  const elapsed = now - textVadStartedAtMs
+  const silentFor = now - textVadLastLoudMs
+  const shouldStop = textVadSpeechHeard
+    ? elapsed > TEXT_CHAT.vadMinRecordMs && silentFor > TEXT_CHAT.vadSilenceMs
+    : elapsed > TEXT_CHAT.vadMaxWaitForSpeechMs
+
+  if (shouldStop) {
+    textVadFired = true
+    void finishTextRecording(textVadSpeechHeard ? 'silence detected' : 'no speech detected')
+  }
+}
+
+function resetTextVad() {
+  textVadSpeechHeard = false
+  textVadFired = false
+  textVadStartedAtMs = performance.now()
+  textVadLastLoudMs = textVadStartedAtMs
+}
+
+function clearTextRecordTimer() {
+  if (textRecordTimer === null) return
+  window.clearTimeout(textRecordTimer)
+  textRecordTimer = null
+}
+
+function pcmRms(chunk: Uint8Array): number {
+  const frames = chunk.byteLength >> 1
+  if (!frames) return 0
+
+  let sum = 0
+  for (let index = 0; index < frames; index += 1) {
+    let sample = chunk[index * 2] | (chunk[index * 2 + 1] << 8)
+    if (sample >= 0x8000) sample -= 0x10000
+    sum += sample * sample
+  }
+
+  return Math.sqrt(sum / frames)
 }
 
 function reportTapFailure(failure: Error) {
@@ -933,6 +1096,11 @@ function renderSummary() {
 }
 
 function describeGemini(state: string): string {
+  if (glassMode === 'text-agent') {
+    if (textRecording) return 'Text recording'
+    if (textProcessing) return 'Text thinking'
+    return 'Text ready'
+  }
   if (state === 'reconnecting') return `Reconnecting (${reconnectCount})`
   if (liveSession?.isReady) return 'Connected'
   if (liveSession?.isConnected) return 'Connecting'
@@ -969,6 +1137,13 @@ function formatTranscript(snapshot: ConversationSnapshot): string {
   }
 
   return lines.join('\n\n')
+}
+
+function formatTextChatTranscript(user: string, assistant: string): string {
+  const lines: string[] = []
+  if (user) lines.push(`You: ${user}`)
+  if (assistant) lines.push(`Gemini: ${assistant}`)
+  return lines.join('\n\n') || 'No response.'
 }
 
 function formatClock(elapsedMs: number): string {
@@ -1096,7 +1271,9 @@ async function cleanup() {
     clockTimer = null
   }
 
+  clearTextRecordTimer()
   await microphone.stop().catch(failure => warn('G2', 'mic stop during cleanup failed', failure))
+  microphone.consumeCapturedPcm()
   closeLiveSession('cleanup')
   await audioOutput.dispose().catch(failure => warn('Audio', 'dispose failed', failure))
   display.dispose()

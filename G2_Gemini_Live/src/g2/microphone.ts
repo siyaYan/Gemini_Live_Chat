@@ -16,12 +16,17 @@ export interface MicrophoneStats {
 }
 
 type StatsListener = (stats: MicrophoneStats, label: string) => void
+export interface MicrophoneStartOptions {
+  capturePcm?: boolean
+}
 
 export class G2MicrophoneProbe {
   private recording = false
   private logTimer: number | null = null
   private statsListener: StatsListener | null = null
   private stats: MicrophoneStats = this.createStats()
+  private capturePcm = false
+  private capturedChunks: Uint8Array[] = []
 
   constructor(private bridge: EvenAppBridge) {}
 
@@ -37,10 +42,12 @@ export class G2MicrophoneProbe {
     this.statsListener = listener
   }
 
-  async start(): Promise<MicrophoneStats> {
+  async start(options: MicrophoneStartOptions = {}): Promise<MicrophoneStats> {
     if (this.recording) return this.snapshot()
 
     this.stats = this.createStats()
+    this.capturePcm = Boolean(options.capturePcm)
+    this.capturedChunks = []
     let opened = await this.bridge.audioControl(true)
 
     if (!opened) {
@@ -52,6 +59,7 @@ export class G2MicrophoneProbe {
     }
 
     if (!opened) {
+      this.capturePcm = false
       throw new Error('audioControl(true) returned false')
     }
 
@@ -65,6 +73,8 @@ export class G2MicrophoneProbe {
 
   async resetControl(): Promise<void> {
     this.recording = false
+    this.capturePcm = false
+    this.capturedChunks = []
     this.clearLogTimer()
     await this.closeAudioControl('recovery reset', false)
   }
@@ -73,6 +83,7 @@ export class G2MicrophoneProbe {
     if (!this.recording) return this.snapshot()
 
     this.recording = false
+    this.capturePcm = false
     this.stats.stoppedAtMs = performance.now()
     this.clearLogTimer()
 
@@ -102,7 +113,22 @@ export class G2MicrophoneProbe {
     this.stats.chunks += 1
     this.stats.latestChunkBytes = pcm.byteLength
     this.stats.totalBytes += pcm.byteLength
+    if (this.capturePcm) this.capturedChunks.push(pcm)
     return pcm
+  }
+
+  consumeCapturedPcm(): Uint8Array {
+    const totalBytes = this.capturedChunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+    const merged = new Uint8Array(totalBytes)
+    let offset = 0
+
+    for (const chunk of this.capturedChunks) {
+      merged.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+
+    this.capturedChunks = []
+    return merged
   }
 
   private createStats(): MicrophoneStats {

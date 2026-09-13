@@ -6,7 +6,7 @@
  * the API key on the dev issuer, and this file ships to the client.
  */
 
-export const APP_VERSION = '0.1.5-beta'
+export const APP_VERSION = '0.1.6-beta'
 
 // ---------------------------------------------------------------- Gemini ----
 
@@ -20,6 +20,26 @@ export const GEMINI = {
   openTimeoutMs: 8000,
   /** How long to wait for a last input transcript when stopping. */
   finalTranscriptTimeoutMs: 1600,
+} as const
+
+// -------------------------------------------------------------- Text Chat ----
+
+export const TEXT_CHAT = {
+  sampleRate: 16000,
+  voiceFetchTimeoutMs: 30000,
+  /** Safety cap so a forgotten text-mode recording cannot run forever. */
+  maxRecordMs: 30000,
+  /**
+   * RMS of signed-16 PCM above this counts as speech. G2 idle is usually below
+   * ~300; normal speech usually lands above 1000.
+   */
+  vadRmsThreshold: 500,
+  /** Stop after this much continuous silence once speech has been heard. */
+  vadSilenceMs: 1600,
+  /** Give up if no speech is heard within this window. */
+  vadMaxWaitForSpeechMs: 6000,
+  /** Avoid clipping the first syllable. */
+  vadMinRecordMs: 700,
 } as const
 
 /**

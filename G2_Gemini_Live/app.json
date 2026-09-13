@@ -2,14 +2,14 @@
   "package_id": "com.siyayan.g2geminilive",
   "edition": "202601",
   "name": "G2 Gemini Live",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "min_app_version": "2.2.5",
   "min_sdk_version": "0.0.10",
   "entrypoint": "index.html",
   "permissions": [
     {
       "name": "network",
-      "desc": "Connect to the private Gemini token service and Gemini Live API.",
+      "desc": "Connect to the private Gemini token, text chat, and Gemini Live APIs.",
       "whitelist": ["https://even-gemini-live.siyayan.com", "https://generativelanguage.googleapis.com"]
     },
     {

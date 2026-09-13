@@ -16,7 +16,8 @@ This project uses Vercel for two separate backend routes:
 ```
 Voice plugin -> Vercel /api/token -> Gemini auth_tokens API
 Voice plugin -> Gemini Live websocket using ephemeral token
-Even AI native agent -> Vercel /api/v1/chat/completions -> Gemini text model
+Text Chat plugin -> Vercel /glasses/voice -> Gemini audio understanding
+Even AI native agent -> Vercel /glasses/agent/v1/chat/completions -> Gemini text model
 ```
 
 ## 1. Deploy Token Issuer to Vercel
@@ -36,6 +37,9 @@ GEMINI_TOKEN_USES=1
 GEMINI_TOKEN_NEW_SESSION_MINUTES=10
 GEMINI_TOKEN_RATE_LIMIT_PER_MINUTE=30
 GEMINI_TOKEN_CONSTRAINTS=0
+GEMINI_TEXT_MODEL=gemini-3.8-flash
+GEMINI_VOICE_MODEL=gemini-3.8-flash
+GEMINI_VOICE_RATE_LIMIT_PER_MINUTE=20
 ```
 
 Optional private-build guard:
@@ -61,7 +65,9 @@ Edit `.env.production.local`:
 ```bash
 VITE_GEMINI_TOKEN_URL=https://YOUR_VERCEL_DOMAIN/api/token
 # Optional if the text-agent route is on a different host:
-# VITE_EVEN_AI_AGENT_URL=https://YOUR_VERCEL_DOMAIN/api/v1/chat/completions
+# VITE_EVEN_AI_AGENT_URL=https://YOUR_VERCEL_DOMAIN/glasses/agent/v1/chat/completions
+# Optional if the plugin voice route is on a different host:
+# VITE_GLASSES_VOICE_URL=https://YOUR_VERCEL_DOMAIN/glasses/voice
 VITE_GEMINI_TOKEN_CLIENT_KEY=same_value_as_GEMINI_TOKEN_CLIENT_KEY_if_used
 VITE_VERBOSE_DIAGNOSTICS=0
 VITE_SHOW_DIAGNOSTICS=0
@@ -86,7 +92,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.5.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.6.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload
@@ -127,7 +133,7 @@ After redeploying, configure the Even app:
 ```text
 Settings → Even AI → Agent Configuration → Add Agent
 Name: Gemini Text
-Endpoint: https://even-gemini-live.siyayan.com/api/v1/chat/completions
+Endpoint: https://even-gemini-live.siyayan.com/glasses/agent/v1/chat/completions
 API Key/Token: same value as EVEN_AI_AGENT_TOKEN
 Save & Activate
 ```
@@ -140,13 +146,16 @@ The plugin's Text Agent card should report `Token Configured` after Vercel has
 When launched from the glasses menu, the plugin now opens a mode selector:
 
 ```text
-Text Agent
+Text Chat
 Voice Chat
 ```
 
-- `Text Agent` is a handoff to Even AI's native agent flow. Say `Hey Even` and
-  ask Gemini; Even AI displays the live response on the glasses. Current Even
-  Hub SDK APIs do not expose a way for a plugin WebView to embed or mirror that
-  native Even AI conversation UI.
+- `Text Chat` records one G2 microphone utterance, auto-stops on silence, sends
+  signed 16-bit PCM to `/glasses/voice`, and renders Gemini's text reply on the
+  glasses. This mirrors the AI Second Brain plugin path.
 - `Voice Chat` keeps the Gemini Live plugin flow. Wake the phone if iOS has
   suspended the WebView, then tap once to start Gemini Live with AirPods audio.
+
+For true no-phone wake-word use, configure Even AI with
+`/glasses/agent/v1/chat/completions`. Even AI owns wake word, STT and lens UI;
+the backend only receives transcribed text and returns a Gemini answer.

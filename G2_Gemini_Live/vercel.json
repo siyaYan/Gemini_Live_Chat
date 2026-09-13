@@ -1,5 +1,8 @@
 {
   "framework": "vite",
   "buildCommand": "npm run build:private",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/glasses/:path*", "destination": "/api/glasses/:path*" }
+  ]
 }

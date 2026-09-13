@@ -72,8 +72,8 @@ export function mountUi() {
             <p>Launch this plugin, wake the phone, then tap G2 once for Gemini Live + AirPods.</p>
           </article>
           <article class="mode-card">
-            <strong>Text Agent</strong>
-            <p>Use Even AI's native glasses flow. Say “Hey Even” after selecting this agent.</p>
+            <strong>Text Chat</strong>
+            <p>Tap once, speak, and read Gemini's text reply on the glasses. “Hey Even” uses the agent endpoint below.</p>
           </article>
         </div>
       </section>

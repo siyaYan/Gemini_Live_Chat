@@ -320,7 +320,7 @@ export class G2Display {
       content:
         'Gemini Mode\n' +
         'Swipe to choose, tap to open\n' +
-        `Selected: ${selected === 'text' ? 'Text Agent' : 'Voice Chat'}`,
+        `Selected: ${selected === 'text' ? 'Text Chat' : 'Voice Chat'}`,
       isEventCapture: 0,
     })
   }
@@ -341,7 +341,7 @@ export class G2Display {
         itemCount: 2,
         itemWidth: 0,
         isItemSelectBorderEn: 1,
-        itemName: ['Text Agent', 'Voice Chat'],
+        itemName: ['Text Chat', 'Voice Chat'],
       }),
       isEventCapture: 1,
     })
