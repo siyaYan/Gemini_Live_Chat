@@ -54,6 +54,17 @@ That client key is not a true public-app secret because it is bundled into the
 `.ehpk`, but it is useful friction for a private package and avoids completely
 anonymous token minting or voice requests.
 
+After changing any Vercel environment variable, redeploy the project. Then check
+the plugin Text Chat backend:
+
+```bash
+curl https://YOUR_VERCEL_DOMAIN/glasses/voice
+```
+
+`protected` must be `true` before `/glasses/voice` will accept Text Chat audio.
+If it is `false`, `GEMINI_TOKEN_CLIENT_KEY` or `GEMINI_VOICE_CLIENT_KEY` is not
+set in the live Vercel deployment yet.
+
 ## 2. Configure Private Package Build
 
 Copy the example:
@@ -94,7 +105,7 @@ npm run pack:private
 Upload the generated file:
 
 ```text
-G2_Gemini_Live/g2-gemini-live-v0.1.6.ehpk
+G2_Gemini_Live/g2-gemini-live-v0.1.7.ehpk
 ```
 
 In the Even Hub developer portal, open your app, go to Private builds, upload

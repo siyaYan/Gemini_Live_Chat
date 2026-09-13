@@ -15,17 +15,27 @@ export type EvenHubGesture =
 export type EvenHubEventLike = {
   sysEvent?: EventEnvelope
   textEvent?: EventEnvelope
+  listEvent?: EventEnvelope
 }
 
 export function interpretGesture(event: EvenHubEventLike): EvenHubGesture {
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
+  const listType = eventTypeOf(event.listEvent)
 
-  if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+  if (
+    sysType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
+    textType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
+    listType === OsEventTypeList.DOUBLE_CLICK_EVENT
+  ) {
     return 'double-tap'
   }
 
-  if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+  if (
+    sysType === OsEventTypeList.CLICK_EVENT ||
+    textType === OsEventTypeList.CLICK_EVENT ||
+    listType === OsEventTypeList.CLICK_EVENT
+  ) {
     return 'single-tap'
   }
 

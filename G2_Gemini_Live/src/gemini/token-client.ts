@@ -183,7 +183,7 @@ export async function fetchGlassesVoice(
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new Error(`Text voice request failed: ${response.status}${detail ? ` ${detail}` : ''}`)
+    throw new Error(formatVoiceRequestFailure(response.status, detail))
   }
 
   const payload = (await response.json()) as Partial<GlassesVoiceResponse>
@@ -192,6 +192,37 @@ export async function fetchGlassesVoice(
     transcript: payload.transcript ?? '',
     display_text: payload.display_text ?? '',
     model: payload.model,
+  }
+}
+
+function formatVoiceRequestFailure(status: number, detail: string): string {
+  const errorCode = parseServerErrorCode(detail)
+
+  if (errorCode === 'voice_client_key_not_configured') {
+    return 'Text backend missing GEMINI_TOKEN_CLIENT_KEY in Vercel; set it and redeploy'
+  }
+
+  if (errorCode === 'unauthorized') {
+    return 'Text backend rejected client key; make Vercel and .env.production.local match, then repack'
+  }
+
+  if (errorCode === 'rate_limited') {
+    return 'Text backend rate limited; wait a minute and retry'
+  }
+
+  if (errorCode === 'gemini_api_key_not_configured') {
+    return 'Text backend missing GEMINI_API_KEY in Vercel'
+  }
+
+  return `Text voice request failed: ${status}${detail ? ` ${detail}` : ''}`
+}
+
+function parseServerErrorCode(detail: string): string {
+  try {
+    const payload = JSON.parse(detail) as { error?: unknown }
+    return typeof payload.error === 'string' ? payload.error : ''
+  } catch {
+    return ''
   }
 }
 

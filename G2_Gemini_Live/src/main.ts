@@ -335,6 +335,7 @@ unsubscribe = bridge.onEvenHubEvent(event => {
 // ---------------------------------------------------------------- gestures --
 
 function shouldIgnoreLaunchSelectionTap(): boolean {
+  if (glassMode !== 'menu') return false
   if (launchSelectionTapIgnored) return false
   if (exitArmed || sessionActive || microphone.isRecording) return false
   if (performance.now() > launchTapGuardUntilMs) return false
@@ -371,6 +372,7 @@ function modeChoiceFromListEvent(event: EvenHubEvent): ModeMenuChoice | null {
 }
 
 async function selectMode(mode: ModeMenuChoice): Promise<void> {
+  launchSelectionTapIgnored = true
   exitArmed = false
 
   if (mode === 'text') {
@@ -401,6 +403,7 @@ async function handleSingleTap() {
   }
 
   if (glassMode === 'text-agent') {
+    setLastEvent(textRecording ? 'Text Chat stop tap received' : 'Text Chat start tap received')
     if (textRecording) await finishTextRecording('tap stop')
     else if (!textProcessing) await startTextRecording()
     return
@@ -518,7 +521,7 @@ async function startTextRecording() {
     setStatus('error', 'Microphone failed')
     setLastEvent((failure as Error).message)
     setTranscript(`Text Chat microphone failed: ${(failure as Error).message}`)
-    await display.show(GLASSES.micFailed)
+    await display.show(`Text mic failed\n${(failure as Error).message.slice(0, 180)}\nTap to retry`)
     return
   }
 
