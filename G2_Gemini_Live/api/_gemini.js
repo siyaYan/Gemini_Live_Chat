@@ -4,6 +4,7 @@ export const GEMINI_OPENAI_CHAT_COMPLETIONS =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
 export const DEFAULT_TEXT_MODEL = 'gemini-3.8-flash'
 export const DEFAULT_VOICE_MODEL = 'gemini-3.8-flash'
+export const DEFAULT_VOICE_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash']
 
 const RATE_BUCKETS = (globalThis.__g2GeminiRouteRateBuckets ??= new Map())
 
@@ -109,7 +110,17 @@ export function textModelName() {
 }
 
 export function voiceModelName() {
-  return process.env.GEMINI_VOICE_MODEL ?? process.env.GEMINI_TEXT_MODEL ?? DEFAULT_VOICE_MODEL
+  return voiceModelNames()[0]
+}
+
+export function voiceModelNames() {
+  return uniqueNonEmptyStrings([
+    process.env.GEMINI_VOICE_MODEL,
+    process.env.GEMINI_TEXT_MODEL,
+    DEFAULT_VOICE_MODEL,
+    ...csvEnv('GEMINI_VOICE_FALLBACK_MODELS'),
+    ...DEFAULT_VOICE_FALLBACK_MODELS,
+  ])
 }
 
 export function withGlassesSystemPrompt(messages) {
@@ -199,4 +210,24 @@ function pruneRateBuckets(now, windowMs) {
   for (const [key, bucket] of RATE_BUCKETS.entries()) {
     if (now - bucket.startedAt > windowMs) RATE_BUCKETS.delete(key)
   }
+}
+
+function csvEnv(name) {
+  return String(process.env[name] ?? '')
+    .split(',')
+    .map(value => value.trim())
+}
+
+function uniqueNonEmptyStrings(values) {
+  const seen = new Set()
+  const result = []
+
+  for (const value of values) {
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    result.push(text)
+  }
+
+  return result
 }

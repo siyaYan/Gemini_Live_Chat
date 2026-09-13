@@ -3,7 +3,7 @@ import {
   hasValidClientKey,
   sendJson,
   setCorsHeaders,
-  voiceModelName,
+  voiceModelNames,
 } from '../_gemini.js'
 
 const MAX_PCM_BYTES = 2 * 1024 * 1024
@@ -21,7 +21,8 @@ export default async function handler(request, response) {
     sendJson(response, 200, {
       ok: true,
       endpoint: '/glasses/voice',
-      model: voiceModelName(),
+      model: voiceModelNames()[0],
+      fallbackModels: voiceModelNames().slice(1),
       protected: Boolean(process.env.GEMINI_VOICE_CLIENT_KEY || process.env.GEMINI_TOKEN_CLIENT_KEY),
       maxPcmBytes: MAX_PCM_BYTES,
     })
@@ -87,6 +88,18 @@ export default async function handler(request, response) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     console.error('[Glasses Voice] Gemini audio request failed:', detail)
+
+    if (isTemporaryGeminiFailure(error)) {
+      sendJson(response, 200, {
+        intent: 'none',
+        transcript: '',
+        display_text: 'Gemini audio is busy right now. Please try again in a minute.',
+        model: error.model ?? voiceModelNames()[0],
+        temporary: true,
+      })
+      return
+    }
+
     sendJson(response, 502, {
       error: 'gemini_audio_request_failed',
       ...(process.env.GEMINI_VOICE_DEBUG === '1' ? { detail } : {}),
@@ -95,8 +108,30 @@ export default async function handler(request, response) {
 }
 
 async function askGeminiWithAudio(apiKey, pcm, sampleRate) {
-  const model = voiceModelName()
   const wav = pcmToWav(pcm, sampleRate)
+  const models = voiceModelNames()
+  const attemptsPerModel = positiveIntEnv('GEMINI_VOICE_RETRIES', 2)
+  const failures = []
+
+  for (const model of models) {
+    for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
+      try {
+        return await askGeminiModelWithAudio(apiKey, wav, model)
+      } catch (error) {
+        failures.push(`${model}#${attempt}: ${error.message}`)
+        if (!isRetryableGeminiFailure(error) || attempt === attemptsPerModel) break
+        await sleep(300 * attempt)
+      }
+    }
+  }
+
+  const failure = new Error(`All Gemini voice models failed: ${failures.join(' | ').slice(0, 1200)}`)
+  failure.status = lastGeminiStatus(failures)
+  failure.model = models[0]
+  throw failure
+}
+
+async function askGeminiModelWithAudio(apiKey, wav, model) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelNameForPath(model)}:generateContent?key=${encodeURIComponent(apiKey)}`
 
   const geminiResponse = await fetch(url, {
@@ -132,7 +167,12 @@ async function askGeminiWithAudio(apiKey, pcm, sampleRate) {
 
   if (!geminiResponse.ok) {
     const detail = await geminiResponse.text().catch(() => '')
-    throw new Error(`Gemini generateContent returned ${geminiResponse.status}${detail ? ` ${detail.slice(0, 400)}` : ''}`)
+    const failure = new Error(
+      `Gemini generateContent returned ${geminiResponse.status}${detail ? ` ${detail.slice(0, 400)}` : ''}`,
+    )
+    failure.status = geminiResponse.status
+    failure.model = model
+    throw failure
   }
 
   const payload = await geminiResponse.json()
@@ -147,6 +187,35 @@ async function askGeminiWithAudio(apiKey, pcm, sampleRate) {
     display_text: displayText || "Didn't catch that.",
     model,
   }
+}
+
+function isRetryableGeminiFailure(error) {
+  const status = Number(error?.status)
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
+function isTemporaryGeminiFailure(error) {
+  const status = Number(error?.status)
+  return status === 429 || status === 503 || /UNAVAILABLE|high demand|rate/i.test(error?.message ?? '')
+}
+
+function lastGeminiStatus(failures) {
+  for (let index = failures.length - 1; index >= 0; index -= 1) {
+    const match = failures[index].match(/returned\s+(\d{3})/)
+    if (match) return Number(match[1])
+  }
+  return 0
+}
+
+function positiveIntEnv(name, fallback) {
+  const value = Number(process.env[name] ?? fallback)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+function sleep(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
 }
 
 function extractText(payload) {
