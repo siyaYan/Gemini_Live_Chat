@@ -136,10 +136,11 @@ export function hasValidAgentToken(request) {
 }
 
 export function hasValidClientKey(request) {
-  const expected = process.env.GEMINI_VOICE_CLIENT_KEY || process.env.GEMINI_TOKEN_CLIENT_KEY
-  if (!expected) return false
+  const expectedKeys = [process.env.GEMINI_VOICE_CLIENT_KEY, process.env.GEMINI_TOKEN_CLIENT_KEY].filter(Boolean)
+  if (!expectedKeys.length) return false
 
-  return timingSafeStringEqual(header(request, 'x-g2-gemini-client-key'), expected)
+  const actual = header(request, 'x-g2-gemini-client-key')
+  return expectedKeys.some(expected => timingSafeStringEqual(actual, expected))
 }
 
 export function consumeRateLimit(request, route, limitEnvName, defaultLimit = 20) {
